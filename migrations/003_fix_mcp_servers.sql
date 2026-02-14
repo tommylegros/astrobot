@@ -11,6 +11,13 @@ UPDATE mcp_servers
 SET args = '["-y", "@playwright/mcp", "--headless", "--browser", "chromium"]'::jsonb
 WHERE name = 'playwright';
 
+-- Fix Google Workspace: wrap in sh -c to ensure writable CWD
+-- (workspace-mcp creates tmp/attachments relative to CWD at import time)
+UPDATE mcp_servers
+SET command = 'sh',
+    args = '["-c", "cd /workspace/agent && exec uvx workspace-mcp"]'::jsonb
+WHERE name = 'google_workspace';
+
 -- Add App Store Connect MCP server (idempotent — skips if already exists)
 INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
 VALUES (

@@ -69,12 +69,13 @@ VALUES (
 
 -- 5. Google Workspace — Gmail, Calendar, Drive, Docs, Sheets, etc.
 --    NOTE: Requires one-time OAuth flow. Credentials persist in /workspace/mcp-data/.
+--    The sh -c wrapper ensures CWD is writable (workspace-mcp creates tmp/attachments).
 INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
 VALUES (
   'google_workspace',
   'stdio',
-  'uvx',
-  '["workspace-mcp"]'::jsonb,
+  'sh',
+  '["-c", "cd /workspace/agent && exec uvx workspace-mcp"]'::jsonb,
   NULL,
   '{
     "GOOGLE_OAUTH_CLIENT_ID": "${GOOGLE_OAUTH_CLIENT_ID}",
