@@ -21,8 +21,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --omit=dev
+# Install all dependencies (including devDependencies for build)
+RUN npm ci
 
 # Copy source and build
 COPY tsconfig.json ./
@@ -31,6 +31,9 @@ COPY migrations/ ./migrations/
 COPY container/ ./container/
 
 RUN npm run build
+
+# Remove devDependencies after build to slim down the image
+RUN npm prune --omit=dev
 
 # Create data directory
 RUN mkdir -p /app/data
