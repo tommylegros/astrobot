@@ -35,6 +35,7 @@ ask()   { echo -en "${BOLD}$*${NC} "; }
 TOTAL_STEPS=10
 CURRENT_STEP=0
 SCRIPT_START_TS="$(date +%s)"
+APT_UPDATED=0
 
 format_duration() {
   local total_seconds="${1:-0}"
@@ -141,13 +142,28 @@ ensure_macos_dependency() {
 }
 
 ensure_docker_desktop_running() {
+  local platform
+  platform="$(uname -s)"
+
   if docker info &>/dev/null; then
     return
   fi
 
-  warn "Docker Desktop is installed but not running."
-  info "Launching Docker Desktop..."
-  open -a Docker || true
+  if [[ "$platform" == "Darwin" ]]; then
+    warn "Docker Desktop is installed but not running."
+    info "Launching Docker Desktop..."
+    open -a Docker || true
+  elif [[ "$platform" == "Linux" ]]; then
+    warn "Docker daemon is installed but not running."
+    if has_cmd systemctl; then
+      info "Starting docker service with systemd..."
+      run_with_privilege systemctl enable --now docker
+    else
+      err "Docker daemon is not running and systemctl is unavailable."
+      info "Start Docker manually, then re-run this script."
+      exit 1
+    fi
+  fi
 
   local retries=60
   until docker info &>/dev/null || [[ $retries -eq 0 ]]; do
@@ -156,9 +172,162 @@ ensure_docker_desktop_running() {
   done
 
   if [[ $retries -eq 0 ]]; then
-    err "Docker daemon is not ready. Start Docker Desktop, then re-run this script."
+    err "Docker daemon is not ready. Start Docker, then re-run this script."
     exit 1
   fi
+}
+
+run_with_privilege() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+
+  if has_cmd sudo; then
+    sudo "$@"
+    return
+  fi
+
+  err "This action needs root privileges, but sudo is not available."
+  exit 1
+}
+
+ensure_apt_updated() {
+  if [[ "$APT_UPDATED" -eq 1 ]]; then
+    return
+  fi
+
+  info "Updating apt package index..."
+  run_with_privilege apt-get update
+  APT_UPDATED=1
+}
+
+ensure_linux_supported() {
+  if [[ ! -f /etc/os-release ]]; then
+    err "Cannot detect Linux distribution (missing /etc/os-release)."
+    return 1
+  fi
+
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  local family="${ID_LIKE:-}"
+  if [[ "${ID:-}" =~ ^(ubuntu|debian)$ ]] || [[ "$family" == *debian* ]]; then
+    return 0
+  fi
+
+  warn "Linux distro '${ID:-unknown}' is not auto-supported yet."
+  return 1
+}
+
+install_linux_docker() {
+  if has_cmd docker; then
+    ok "Docker already installed"
+    return
+  fi
+
+  ensure_linux_supported || return
+  ensure_apt_updated
+  info "Installing Docker engine + compose plugin for Debian/Ubuntu..."
+
+  run_with_privilege apt-get install -y ca-certificates curl gnupg
+  run_with_privilege install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/$(. /etc/os-release && echo "${ID}")/gpg" \
+    | run_with_privilege gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  run_with_privilege chmod a+r /etc/apt/keyrings/docker.gpg
+
+  local arch codename
+  arch="$(dpkg --print-architecture)"
+  codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}")"
+  if [[ -z "$codename" ]]; then
+    err "Unable to detect Linux codename for Docker repository setup."
+    exit 1
+  fi
+
+  echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$(. /etc/os-release && echo "${ID}") ${codename} stable" \
+    | run_with_privilege tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+  APT_UPDATED=0
+  ensure_apt_updated
+  run_with_privilege apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  if has_cmd systemctl; then
+    run_with_privilege systemctl enable --now docker
+  fi
+  ok "Docker installed"
+}
+
+install_linux_node() {
+  local needs_node=1
+  if has_cmd node; then
+    local major
+    major="$(node -v | sed 's/v//' | cut -d. -f1)"
+    if [[ "$major" -ge 20 ]]; then
+      needs_node=0
+      ok "Node.js already installed: $(node -v)"
+    fi
+  fi
+
+  if [[ "$needs_node" -eq 0 ]]; then
+    return
+  fi
+
+  ensure_linux_supported || return
+  ensure_apt_updated
+  info "Installing Node.js 20 LTS..."
+
+  run_with_privilege apt-get install -y ca-certificates curl gnupg
+  run_with_privilege install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | run_with_privilege gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  run_with_privilege chmod a+r /etc/apt/keyrings/nodesource.gpg
+
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    | run_with_privilege tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+
+  APT_UPDATED=0
+  ensure_apt_updated
+  run_with_privilege apt-get install -y nodejs
+  ok "Node.js installed: $(node -v)"
+}
+
+install_linux_op() {
+  if has_cmd op; then
+    ok "1Password CLI already installed: $(op --version)"
+    return
+  fi
+
+  ensure_linux_supported || return
+  ensure_apt_updated
+  info "Installing 1Password CLI..."
+
+  run_with_privilege apt-get install -y ca-certificates curl gnupg
+  run_with_privilege install -m 0755 -d /usr/share/keyrings
+  curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
+    | run_with_privilege gpg --dearmor -o /usr/share/keyrings/1password-archive-keyring.gpg
+  run_with_privilege chmod a+r /usr/share/keyrings/1password-archive-keyring.gpg
+
+  local arch
+  arch="$(dpkg --print-architecture)"
+  echo "deb [arch=${arch} signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/${arch} stable main" \
+    | run_with_privilege tee /etc/apt/sources.list.d/1password.list >/dev/null
+
+  APT_UPDATED=0
+  ensure_apt_updated
+  run_with_privilege apt-get install -y 1password-cli
+  ok "1Password CLI installed: $(op --version)"
+}
+
+install_linux_prerequisites() {
+  if ! ensure_linux_supported; then
+    info "Install prerequisites manually:"
+    echo "  Docker: https://docs.docker.com/engine/install/"
+    echo "  Node.js 20+: https://nodejs.org/"
+    echo "  1Password CLI: https://developer.1password.com/docs/cli/get-started/"
+    return
+  fi
+
+  install_linux_docker
+  install_linux_node
+  install_linux_op
 }
 
 install_prerequisites() {
@@ -179,8 +348,11 @@ install_prerequisites() {
       ensure_macos_dependency node node "Node.js"
       ensure_macos_dependency op 1password-cli "1Password CLI"
       ;;
+    Linux)
+      install_linux_prerequisites
+      ;;
     *)
-      warn "Automatic prerequisite installation is currently supported on macOS only."
+      warn "Automatic prerequisite installation is currently supported on macOS and Debian/Ubuntu Linux."
       info "Install prerequisites manually:"
       echo "  Docker: https://docs.docker.com/engine/install/"
       echo "  Node.js 20+: https://nodejs.org/"
@@ -198,6 +370,72 @@ run_with_timer() {
   "$@"
   end_ts="$(date +%s)"
   ok "$label completed in $(format_duration $(( end_ts - start_ts )))"
+}
+
+ensure_op_authenticated() {
+  if op whoami &>/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "1Password CLI is not authenticated in this shell."
+  info "This can happen on headless SSH sessions."
+
+  local attempts=0
+  while ! op whoami &>/dev/null 2>&1; do
+    attempts=$(( attempts + 1 ))
+    if [[ "$attempts" -gt 5 ]]; then
+      err "Unable to authenticate 1Password CLI after multiple attempts."
+      return 1
+    fi
+
+    echo ""
+    echo "Choose a 1Password authentication method:"
+    echo "  1) Interactive sign-in now (op signin)"
+    echo "  2) Paste OP_SERVICE_ACCOUNT_TOKEN (recommended for headless servers)"
+    echo "  3) Re-check authentication (if you signed in in another shell)"
+    echo "  4) Abort deploy"
+    echo ""
+    ask "Auth method [1]:"
+    local auth_choice
+    read -r auth_choice
+
+    case "${auth_choice:-1}" in
+      1)
+        info "Starting interactive sign-in..."
+        info "If a device code is shown, complete it from any browser and return here."
+        # op signin prints shell exports; eval applies them to this shell session.
+        if eval "$(op signin)"; then
+          ok "Interactive sign-in command completed"
+        else
+          warn "Interactive sign-in did not complete successfully."
+        fi
+        ;;
+      2)
+        ask "OP_SERVICE_ACCOUNT_TOKEN:"
+        local service_token
+        read -rs service_token
+        echo ""
+        if [[ -z "$service_token" ]]; then
+          warn "No token entered."
+        else
+          export OP_SERVICE_ACCOUNT_TOKEN="$service_token"
+          ok "Service account token exported for this session"
+        fi
+        ;;
+      3)
+        info "Re-checking 1Password authentication..."
+        ;;
+      4)
+        err "Aborted by user."
+        return 1
+        ;;
+      *)
+        warn "Invalid option: ${auth_choice}"
+        ;;
+    esac
+  done
+
+  return 0
 }
 
 # ── Pre-flight checks ──────────────────────────────────────────────
@@ -239,13 +477,8 @@ require_cmd op "Install 1Password CLI: https://developer.1password.com/docs/cli/
 ok "1Password CLI found: $(op --version)"
 
 # Check 1Password sign-in
-if ! op whoami &>/dev/null 2>&1; then
-  warn "1Password CLI is not signed in."
-  info "Sign in now:"
-  echo ""
-  echo "  eval \$(op signin)"
-  echo ""
-  info "Then re-run this script."
+if ! ensure_op_authenticated; then
+  info "1Password authentication is required for deployment."
   exit 1
 fi
 OP_ACCOUNT=$(op whoami --format=json 2>/dev/null | grep -o '"email":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
