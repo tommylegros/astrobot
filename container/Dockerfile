@@ -62,7 +62,7 @@ RUN uvx workspace-mcp --help 2>/dev/null || true && \
 # Clone + install deps at build time so it's ready to run as `python3 -m src.server`
 RUN git clone --depth 1 https://github.com/cdtait/fmp-mcp-server.git /opt/fmp-mcp-server && \
     cd /opt/fmp-mcp-server && \
-    uv pip install --system -r requirements.txt && \
+    uv pip install --system --break-system-packages -r requirements.txt && \
     chmod -R a+rX /opt/fmp-mcp-server
 
 # ── Agent runner build ──────────────────────────────────────────────
