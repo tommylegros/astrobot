@@ -37,6 +37,8 @@ services:
       MAX_CONCURRENT_CONTAINERS: ${MAX_CONCURRENT_CONTAINERS:-5}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       NODE_ENV: production
+      # Host project path for Docker-in-Docker bind mounts (agent containers)
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-${PWD}}
 
 volumes:
   pgdata:

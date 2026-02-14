@@ -135,10 +135,17 @@ export async function runContainerAgent(
   );
 
   // Build container configuration
+  // When running inside Docker (via docker-compose), bind mount paths must
+  // reference the HOST filesystem, not the container's. HOST_PROJECT_DIR is
+  // set by docker-compose to ${PWD} (the host project root).
+  const hostProjectDir = process.env.HOST_PROJECT_DIR || process.cwd();
+  const hostDataDir = path.join(hostProjectDir, 'data');
+  const hostIpcDir = path.join(hostDataDir, 'ipc', input.agentId);
+  const hostWorkDir = path.join(hostDataDir, 'workspaces', input.agentId);
+
   const binds = [
-    `${agentIpcDir}:/workspace/ipc`,
-    `${agentWorkDir}:/workspace/agent`,
-    `${path.join(process.cwd(), 'container', 'agent-runner', 'src')}:/app/src:ro`,
+    `${hostIpcDir}:/workspace/ipc`,
+    `${hostWorkDir}:/workspace/agent`,
   ];
 
   // Environment variables for the container
