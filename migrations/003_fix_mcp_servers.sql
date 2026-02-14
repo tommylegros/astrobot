@@ -1,0 +1,29 @@
+-- ─────────────────────────────────────────────────────────────────────
+-- Migration 003: Fix MCP server configurations
+--
+-- 1. Playwright: Remove invalid --no-chromium-sandbox flag.
+-- 2. App Store Connect: Add new MCP server (if not already present).
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Fix Playwright args: remove the invalid --no-chromium-sandbox flag
+UPDATE mcp_servers
+SET args = '["-y", "@playwright/mcp", "--headless", "--browser", "chromium"]'::jsonb
+WHERE name = 'playwright';
+
+-- Add App Store Connect MCP server (idempotent — skips if already exists)
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'app_store_connect',
+  'stdio',
+  'sh',
+  '["-c", "printf ''%s'' \"$APP_STORE_CONNECT_P8_KEY\" > /tmp/asc-authkey.p8 && exec npx -y appstore-connect-mcp-server"]'::jsonb,
+  NULL,
+  '{
+    "APP_STORE_CONNECT_KEY_ID": "${APP_STORE_CONNECT_KEY_ID}",
+    "APP_STORE_CONNECT_ISSUER_ID": "${APP_STORE_CONNECT_ISSUER_ID}",
+    "APP_STORE_CONNECT_P8_KEY": "${APP_STORE_CONNECT_P8_KEY}",
+    "APP_STORE_CONNECT_P8_PATH": "/tmp/asc-authkey.p8",
+    "APP_STORE_CONNECT_VENDOR_NUMBER": "${APP_STORE_CONNECT_VENDOR_NUMBER}"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;

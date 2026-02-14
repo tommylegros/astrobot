@@ -23,6 +23,28 @@ import { logger } from './logger.js';
 import { MCPServerConfig } from './types.js';
 
 /**
+ * Rewrite a DATABASE_URL for use inside agent containers.
+ *
+ * Agent containers run with NetworkMode: 'host', so they share the VPS's
+ * network stack. The docker-compose service hostname (e.g. "postgres") only
+ * resolves inside the compose network — not on the host. We replace it with
+ * 127.0.0.1 so the container can reach PostgreSQL via the port mapping
+ * (127.0.0.1:5432) exposed in docker-compose.yml.
+ */
+function containerDatabaseUrl(databaseUrl: string): string {
+  try {
+    const url = new URL(databaseUrl);
+    if (url.hostname === 'postgres' || url.hostname === 'db') {
+      url.hostname = '127.0.0.1';
+    }
+    return url.toString();
+  } catch {
+    // Fallback: simple string replacement
+    return databaseUrl.replace(/@postgres[:/]/, '@127.0.0.1:');
+  }
+}
+
+/**
  * Get the full list of MCP servers for a given agent.
  * Combines: built-in servers + global DB servers + agent-specific DB servers + agent definition servers
  */
@@ -31,6 +53,9 @@ export async function getMCPServersForAgent(
   databaseUrl: string,
 ): Promise<MCPServerConfig[]> {
   const servers: MCPServerConfig[] = [];
+
+  // Database URL rewritten for agent containers (host networking → 127.0.0.1)
+  const containerDbUrl = containerDatabaseUrl(databaseUrl);
 
   // 1. Built-in IPC MCP server (always included)
   servers.push({
@@ -53,7 +78,7 @@ export async function getMCPServersForAgent(
     args: ['/tmp/dist/memory-mcp.js'],
     env: {
       ASTROBOT_AGENT_ID: agent.id,
-      DATABASE_URL: databaseUrl,
+      DATABASE_URL: containerDbUrl,
     },
   });
 

@@ -4,6 +4,10 @@ services:
     restart: unless-stopped
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Expose to localhost so agent containers (NetworkMode: host) can reach PG.
+    # Bound to 127.0.0.1 only — not accessible from outside the VPS.
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: astrobot
       POSTGRES_USER: astrobot

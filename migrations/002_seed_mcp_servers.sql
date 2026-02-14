@@ -44,7 +44,7 @@ VALUES (
   'playwright',
   'stdio',
   'npx',
-  '["-y", "@playwright/mcp", "--headless", "--browser", "chromium", "--no-chromium-sandbox"]'::jsonb,
+  '["-y", "@playwright/mcp", "--headless", "--browser", "chromium"]'::jsonb,
   NULL,
   '{
     "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": "/usr/bin/chromium",
