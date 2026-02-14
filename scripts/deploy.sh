@@ -841,11 +841,12 @@ header "MCP Server Integrations (optional)"
 info "Configure optional MCP servers to extend your agents' capabilities"
 echo ""
 echo "Available integrations:"
-echo "  • Slack            — Messages, channels, reactions, user profiles"
-echo "  • Todoist          — Tasks, projects, labels, comments"
-echo "  • Brave Search     — Web, image, video, news search + AI summaries"
-echo "  • Google Workspace — Gmail, Calendar, Drive, Docs, Sheets, Slides"
-echo "  • Playwright       — Browser automation (auto-enabled, no key needed)"
+echo "  • Slack              — Messages, channels, reactions, user profiles"
+echo "  • Todoist            — Tasks, projects, labels, comments"
+echo "  • Brave Search       — Web, image, video, news search + AI summaries"
+echo "  • Google Workspace   — Gmail, Calendar, Drive, Docs, Sheets, Slides"
+echo "  • App Store Connect  — Apps, beta testers, versions, analytics, sales"
+echo "  • Playwright         — Browser automation (auto-enabled, no key needed)"
 echo ""
 echo "You can skip all and configure later: ./scripts/update.sh --setup-mcp"
 echo ""
@@ -858,6 +859,10 @@ TODOIST_API_KEY_REF=""
 BRAVE_API_KEY_REF=""
 GOOGLE_OAUTH_CLIENT_ID_REF=""
 GOOGLE_OAUTH_CLIENT_SECRET_REF=""
+APP_STORE_CONNECT_KEY_ID_REF=""
+APP_STORE_CONNECT_ISSUER_ID_REF=""
+APP_STORE_CONNECT_P8_KEY_REF=""
+APP_STORE_CONNECT_VENDOR_NUMBER_VAL=""
 
 # -- Slack --
 if confirm "Set up Slack?"; then
@@ -998,6 +1003,71 @@ if confirm "Set up Google Workspace (Gmail, Calendar, Drive, Docs, Sheets)?"; th
   fi
 fi
 
+# -- App Store Connect --
+if confirm "Set up App Store Connect (manage apps, beta testers, analytics, sales)?"; then
+  ITEM_NAME="App Store Connect"
+  if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+    ok "1Password item '$ITEM_NAME' already exists"
+    ASC_KEY_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "key id" "key_id")" || true
+    ASC_ISSUER_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "issuer id" "issuer_id")" || true
+    ASC_P8_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "private key" "p8_key" "p8 key")" || true
+    if [[ -n "${ASC_KEY_FIELD:-}" ]]; then
+      APP_STORE_CONNECT_KEY_ID_REF="op://$VAULT_NAME/$ITEM_NAME/$ASC_KEY_FIELD"
+    fi
+    if [[ -n "${ASC_ISSUER_FIELD:-}" ]]; then
+      APP_STORE_CONNECT_ISSUER_ID_REF="op://$VAULT_NAME/$ITEM_NAME/$ASC_ISSUER_FIELD"
+    fi
+    if [[ -n "${ASC_P8_FIELD:-}" ]]; then
+      APP_STORE_CONNECT_P8_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/$ASC_P8_FIELD"
+    fi
+  else
+    echo ""
+    echo "Generate an App Store Connect API key:"
+    echo "  1. App Store Connect → Users and Access → Integrations → Keys"
+    echo "  2. Click '+' to generate a new API key"
+    echo "  3. Download the .p8 private key file"
+    echo "  4. Note your Key ID and Issuer ID"
+    echo ""
+    ask "API Key ID:"
+    read -r ASC_KEY_VAL
+    ask "Issuer ID:"
+    read -r ASC_ISSUER_VAL
+    echo ""
+    echo "Paste the contents of your .p8 private key file below."
+    echo "  (Open the file with: cat /path/to/AuthKey_XXXXXXXXXX.p8)"
+    echo "  Paste all lines including -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY-----"
+    echo "  Press Enter on an empty line when done:"
+    ASC_P8_VAL=""
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && break
+      if [[ -z "$ASC_P8_VAL" ]]; then
+        ASC_P8_VAL="$line"
+      else
+        ASC_P8_VAL="$ASC_P8_VAL
+$line"
+      fi
+    done
+    echo ""
+    ask "Vendor Number (optional, for sales/finance reports):"
+    read -r APP_STORE_CONNECT_VENDOR_NUMBER_VAL
+
+    if [[ -n "${ASC_KEY_VAL:-}" && -n "${ASC_ISSUER_VAL:-}" && -n "${ASC_P8_VAL:-}" ]]; then
+      local_fields=("key id=$ASC_KEY_VAL" "issuer id=$ASC_ISSUER_VAL" "private key=$ASC_P8_VAL")
+      [[ -n "${APP_STORE_CONNECT_VENDOR_NUMBER_VAL:-}" ]] && local_fields+=("vendor number=$APP_STORE_CONNECT_VENDOR_NUMBER_VAL")
+      create_1password_item \
+        "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
+        "${local_fields[@]}" || \
+        warn "Failed to store App Store Connect credentials in 1Password"
+      APP_STORE_CONNECT_KEY_ID_REF="op://$VAULT_NAME/$ITEM_NAME/key id"
+      APP_STORE_CONNECT_ISSUER_ID_REF="op://$VAULT_NAME/$ITEM_NAME/issuer id"
+      APP_STORE_CONNECT_P8_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/private key"
+      ok "App Store Connect credentials stored in 1Password"
+    else
+      warn "Skipping App Store Connect (Key ID, Issuer ID, or private key missing)"
+    fi
+  fi
+fi
+
 # Playwright needs no credentials
 ok "Playwright browser automation: auto-enabled (uses pre-installed Chromium)"
 
@@ -1008,6 +1078,7 @@ MCP_CONFIGURED=()
 [[ -n "$TODOIST_API_KEY_REF" ]] && MCP_CONFIGURED+=("Todoist")
 [[ -n "$BRAVE_API_KEY_REF" ]] && MCP_CONFIGURED+=("Brave Search")
 [[ -n "$GOOGLE_OAUTH_CLIENT_ID_REF" ]] && MCP_CONFIGURED+=("Google Workspace")
+[[ -n "$APP_STORE_CONNECT_KEY_ID_REF" ]] && MCP_CONFIGURED+=("App Store Connect")
 MCP_CONFIGURED+=("Playwright")
 
 if [[ ${#MCP_CONFIGURED[@]} -gt 1 ]]; then
@@ -1044,7 +1115,7 @@ fi
 ok "All 1Password references validated"
 
 # Validate MCP references (non-blocking — these are optional)
-for mcp_ref in "$SLACK_BOT_TOKEN_REF" "$TODOIST_API_KEY_REF" "$BRAVE_API_KEY_REF" "$GOOGLE_OAUTH_CLIENT_ID_REF"; do
+for mcp_ref in "$SLACK_BOT_TOKEN_REF" "$TODOIST_API_KEY_REF" "$BRAVE_API_KEY_REF" "$GOOGLE_OAUTH_CLIENT_ID_REF" "$APP_STORE_CONNECT_KEY_ID_REF"; do
   if [[ -n "$mcp_ref" ]] && ! op read "$mcp_ref" &>/dev/null; then
     warn "Cannot validate MCP reference: $mcp_ref (server may not work until fixed)"
   fi
@@ -1106,6 +1177,10 @@ TODOIST_API_KEY=$TODOIST_API_KEY_REF
 BRAVE_API_KEY=$BRAVE_API_KEY_REF
 GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID_REF
 GOOGLE_OAUTH_CLIENT_SECRET=$GOOGLE_OAUTH_CLIENT_SECRET_REF
+APP_STORE_CONNECT_KEY_ID=$APP_STORE_CONNECT_KEY_ID_REF
+APP_STORE_CONNECT_ISSUER_ID=$APP_STORE_CONNECT_ISSUER_ID_REF
+APP_STORE_CONNECT_P8_KEY=$APP_STORE_CONNECT_P8_KEY_REF
+APP_STORE_CONNECT_VENDOR_NUMBER=$APP_STORE_CONNECT_VENDOR_NUMBER_VAL
 MCPEOF
 
 # Lock down .env permissions

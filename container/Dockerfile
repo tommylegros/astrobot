@@ -43,7 +43,8 @@ RUN npm install -g \
     @zencoderai/slack-mcp-server \
     todoist-mcp \
     @playwright/mcp \
-    @brave/brave-search-mcp-server && \
+    @brave/brave-search-mcp-server \
+    appstore-connect-mcp-server && \
     npm cache clean --force
 
 # Python MCP servers: install uv/uvx system-wide

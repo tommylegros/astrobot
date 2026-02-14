@@ -582,6 +582,86 @@ if [[ "$SETUP_MCP" == true ]]; then
       fi
     fi
 
+    # -- App Store Connect --
+    CURRENT_ASC="$(grep '^APP_STORE_CONNECT_KEY_ID=' .env 2>/dev/null | cut -d= -f2-)" || true
+    if [[ -n "$CURRENT_ASC" ]]; then
+      ok "App Store Connect: already configured"
+    elif confirm "Set up App Store Connect (manage apps, beta testers, analytics, sales)?"; then
+      ITEM_NAME="App Store Connect"
+      if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+        ok "1Password item '$ITEM_NAME' already exists"
+        ASC_KEY_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "key id" "key_id")" || true
+        ASC_ISSUER_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "issuer id" "issuer_id")" || true
+        ASC_P8_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "private key" "p8_key" "p8 key")" || true
+        if [[ -n "${ASC_KEY_FIELD:-}" && -n "${ASC_ISSUER_FIELD:-}" ]]; then
+          if grep -q '^APP_STORE_CONNECT_KEY_ID=' .env 2>/dev/null; then
+            sed -i.bak "s|^APP_STORE_CONNECT_KEY_ID=.*|APP_STORE_CONNECT_KEY_ID=op://$VAULT_NAME/$ITEM_NAME/$ASC_KEY_FIELD|" .env && rm -f .env.bak
+            sed -i.bak "s|^APP_STORE_CONNECT_ISSUER_ID=.*|APP_STORE_CONNECT_ISSUER_ID=op://$VAULT_NAME/$ITEM_NAME/$ASC_ISSUER_FIELD|" .env && rm -f .env.bak
+            [[ -n "${ASC_P8_FIELD:-}" ]] && sed -i.bak "s|^APP_STORE_CONNECT_P8_KEY=.*|APP_STORE_CONNECT_P8_KEY=op://$VAULT_NAME/$ITEM_NAME/$ASC_P8_FIELD|" .env && rm -f .env.bak
+          else
+            echo "APP_STORE_CONNECT_KEY_ID=op://$VAULT_NAME/$ITEM_NAME/$ASC_KEY_FIELD" >> .env
+            echo "APP_STORE_CONNECT_ISSUER_ID=op://$VAULT_NAME/$ITEM_NAME/$ASC_ISSUER_FIELD" >> .env
+            [[ -n "${ASC_P8_FIELD:-}" ]] && echo "APP_STORE_CONNECT_P8_KEY=op://$VAULT_NAME/$ITEM_NAME/$ASC_P8_FIELD" >> .env
+            echo "APP_STORE_CONNECT_VENDOR_NUMBER=" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "App Store Connect configured from existing 1Password item"
+        fi
+      else
+        echo ""
+        echo "Generate an App Store Connect API key:"
+        echo "  1. App Store Connect → Users and Access → Integrations → Keys"
+        echo "  2. Click '+' to generate a new API key"
+        echo "  3. Download the .p8 private key file"
+        echo "  4. Note your Key ID and Issuer ID"
+        echo ""
+        ask "API Key ID:"
+        read -r ASC_KEY_VAL
+        ask "Issuer ID:"
+        read -r ASC_ISSUER_VAL
+        echo ""
+        echo "Paste the contents of your .p8 private key file below."
+        echo "  (Open the file with: cat /path/to/AuthKey_XXXXXXXXXX.p8)"
+        echo "  Paste all lines including -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY-----"
+        echo "  Press Enter on an empty line when done:"
+        ASC_P8_VAL=""
+        while IFS= read -r line; do
+          [[ -z "$line" ]] && break
+          if [[ -z "$ASC_P8_VAL" ]]; then
+            ASC_P8_VAL="$line"
+          else
+            ASC_P8_VAL="$ASC_P8_VAL
+$line"
+          fi
+        done
+        echo ""
+        ask "Vendor Number (optional, for sales/finance reports):"
+        read -r ASC_VENDOR_VAL
+
+        if [[ -n "${ASC_KEY_VAL:-}" && -n "${ASC_ISSUER_VAL:-}" && -n "${ASC_P8_VAL:-}" ]]; then
+          local_fields=("key id=$ASC_KEY_VAL" "issuer id=$ASC_ISSUER_VAL" "private key=$ASC_P8_VAL")
+          [[ -n "${ASC_VENDOR_VAL:-}" ]] && local_fields+=("vendor number=$ASC_VENDOR_VAL")
+          create_1password_item "$VAULT_NAME" "App Store Connect" "API Credential" \
+            "${local_fields[@]}" || warn "Failed to store App Store Connect credentials"
+
+          if grep -q '^APP_STORE_CONNECT_KEY_ID=' .env 2>/dev/null; then
+            sed -i.bak "s|^APP_STORE_CONNECT_KEY_ID=.*|APP_STORE_CONNECT_KEY_ID=op://$VAULT_NAME/App Store Connect/key id|" .env && rm -f .env.bak
+            sed -i.bak "s|^APP_STORE_CONNECT_ISSUER_ID=.*|APP_STORE_CONNECT_ISSUER_ID=op://$VAULT_NAME/App Store Connect/issuer id|" .env && rm -f .env.bak
+            sed -i.bak "s|^APP_STORE_CONNECT_P8_KEY=.*|APP_STORE_CONNECT_P8_KEY=op://$VAULT_NAME/App Store Connect/private key|" .env && rm -f .env.bak
+          else
+            echo "APP_STORE_CONNECT_KEY_ID=op://$VAULT_NAME/App Store Connect/key id" >> .env
+            echo "APP_STORE_CONNECT_ISSUER_ID=op://$VAULT_NAME/App Store Connect/issuer id" >> .env
+            echo "APP_STORE_CONNECT_P8_KEY=op://$VAULT_NAME/App Store Connect/private key" >> .env
+            echo "APP_STORE_CONNECT_VENDOR_NUMBER=${ASC_VENDOR_VAL:-}" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "App Store Connect credentials stored in 1Password and .env updated"
+        else
+          warn "Skipping App Store Connect (Key ID, Issuer ID, or private key missing)"
+        fi
+      fi
+    fi
+
     # Playwright — always available
     ok "Playwright browser automation: always enabled (no credentials needed)"
 
@@ -690,6 +770,7 @@ grep -q '^SLACK_BOT_TOKEN=.\+' .env 2>/dev/null && MCP_LIST+=("Slack")
 grep -q '^TODOIST_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Todoist")
 grep -q '^BRAVE_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Brave Search")
 grep -q '^GOOGLE_OAUTH_CLIENT_ID=.\+' .env 2>/dev/null && MCP_LIST+=("Google Workspace")
+grep -q '^APP_STORE_CONNECT_KEY_ID=.\+' .env 2>/dev/null && MCP_LIST+=("App Store Connect")
 echo "  MCP servers:         ${MCP_LIST[*]}"
 echo ""
 
