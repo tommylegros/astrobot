@@ -37,7 +37,7 @@ import { writeAgentsSnapshot } from './agent-snapshot.js';
 import { logger } from './logger.js';
 import { getMCPServersForAgent } from './mcp-registry.js';
 import { formatOutbound } from './router.js';
-import { Channel, ContainerOutput } from './types.js';
+import { Channel, ContainerOutput, MediaAttachment } from './types.js';
 
 interface OrchestratorState {
   agent: AgentRow;
@@ -90,6 +90,7 @@ export async function handleMessage(
   chatId: string,
   senderName: string,
   content: string,
+  media?: MediaAttachment[],
 ): Promise<void> {
   if (!state || !channel) {
     logger.error('Orchestrator not initialized');
@@ -130,11 +131,18 @@ export async function handleMessage(
     { role: 'user', content, sender: senderName, timestamp: new Date().toISOString() },
   ]);
 
+  // Convert media attachments for IPC
+  const ipcMedia = media?.map((m) => ({
+    type: m.type,
+    path: m.path,
+    mimeType: m.mimeType,
+  }));
+
   // If there's an active container, pipe the message to it
   if (state.activeContainerId) {
-    const sent = sendIpcMessage(state.agent.id, content);
+    const sent = sendIpcMessage(state.agent.id, content, ipcMedia);
     if (sent) {
-      logger.debug({ chatId }, 'Piped message to active orchestrator container');
+      logger.debug({ chatId, hasMedia: !!media?.length }, 'Piped message to active orchestrator container');
       resetIdleTimer();
       return;
     }
@@ -143,7 +151,7 @@ export async function handleMessage(
   }
 
   // Spawn a new orchestrator container
-  await spawnOrchestratorContainer(chatId, content);
+  await spawnOrchestratorContainer(chatId, content, media);
 }
 
 /**
@@ -152,6 +160,7 @@ export async function handleMessage(
 async function spawnOrchestratorContainer(
   chatId: string,
   prompt: string,
+  media?: MediaAttachment[],
 ): Promise<void> {
   if (!state || !channel) return;
 
@@ -204,11 +213,36 @@ Example flow:
   // Get MCP servers for this agent
   const mcpServers = await getMCPServersForAgent(state.agent, DATABASE_URL);
 
+  // Prepare media for container input — copy files into IPC media dir
+  // and rewrite paths to container-side paths
+  let containerMedia: MediaAttachment[] | undefined;
+  if (media && media.length > 0) {
+    const fs = await import('fs');
+    const pathMod = await import('path');
+    const mediaDir = pathMod.default.join(DATA_DIR, 'ipc', state.agent.id, 'media');
+    fs.default.mkdirSync(mediaDir, { recursive: true });
+    try { fs.default.chmodSync(mediaDir, 0o777); } catch { /* best effort */ }
+
+    containerMedia = media.map((m) => {
+      const ext = pathMod.default.extname(m.path) || '.jpg';
+      const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const destPath = pathMod.default.join(mediaDir, filename);
+      fs.default.copyFileSync(m.path, destPath);
+      try { fs.default.chmodSync(destPath, 0o666); } catch { /* best effort */ }
+      return {
+        type: m.type as 'image',
+        path: `/workspace/ipc/media/${filename}`,
+        mimeType: m.mimeType,
+      };
+    });
+  }
+
   state.activeContainerId = state.agent.id;
 
   const output = await runContainerAgent({
     input: {
       prompt,
+      media: containerMedia,
       agentId: state.agent.id,
       agentName: state.agent.name,
       model: state.agent.model,
@@ -341,6 +375,41 @@ export async function handleIpcMessage(data: {
         }
       }
       break;
+
+    case 'image': {
+      // Image sent by agent — read from IPC media dir and send via Telegram
+      const imagePath = data.path as string;
+      const caption = data.caption as string | undefined;
+      if (imagePath) {
+        // Resolve container path to host path
+        const fs = await import('fs');
+        const pathMod = await import('path');
+        const agentId = (data.agentId as string) || state.agent.id;
+        const hostPath = imagePath.startsWith('/workspace/ipc/')
+          ? pathMod.default.join(DATA_DIR, 'ipc', agentId, imagePath.replace('/workspace/ipc/', ''))
+          : imagePath;
+
+        if (fs.default.existsSync(hostPath)) {
+          if (channel.sendPhoto) {
+            await channel.sendPhoto(state.chatId, hostPath, caption ? formatOutbound(caption) : undefined);
+          } else {
+            // Fallback: send as text if channel doesn't support photos
+            await channel.sendMessage(state.chatId, caption || '[Image generated]');
+          }
+
+          await logMessage({
+            telegram_chat_id: parseInt(state.chatId, 10) || undefined,
+            sender: data.agentName || ASSISTANT_NAME,
+            content: `[Image: ${caption || 'sent'}]`,
+            direction: 'outbound',
+            agent_id: state.agent.id,
+          });
+        } else {
+          logger.error({ hostPath, originalPath: imagePath }, 'Image file not found for IPC image message');
+        }
+      }
+      break;
+    }
 
     case 'delegate_to_agent':
       if (data.targetAgent && data.task) {

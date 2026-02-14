@@ -4,11 +4,14 @@
  * DM-only mode: only responds to direct messages to the bot.
  * Uses grammy framework for the Telegram Bot API.
  */
-import { Bot, Context } from 'grammy';
+import fs from 'fs';
+import path from 'path';
 
-import { ASSISTANT_NAME } from '../config.js';
+import { Bot, Context, InputFile } from 'grammy';
+
+import { ASSISTANT_NAME, DATA_DIR } from '../config.js';
 import { logger } from '../logger.js';
-import { Channel, InboundMessage, OnInboundMessage } from '../types.js';
+import { Channel, InboundMessage, MediaAttachment, OnInboundMessage } from '../types.js';
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
@@ -92,6 +95,46 @@ export class TelegramChannel implements Channel {
       this.onMessage(chatId, message);
     });
 
+    // Handle photo messages
+    this.bot.on('message:photo', async (ctx) => {
+      if (!this.isAllowed(ctx)) return;
+      if (ctx.chat.type !== 'private') return;
+
+      const chatId = ctx.chat.id.toString();
+      const photos = ctx.message.photo;
+      // Pick the largest resolution (last in the array)
+      const photo = photos[photos.length - 1];
+
+      try {
+        const mediaPath = await this.downloadTelegramFile(photo.file_id);
+        const media: MediaAttachment[] = [{
+          type: 'image',
+          path: mediaPath,
+          mimeType: 'image/jpeg', // Telegram always sends photos as JPEG
+          filename: path.basename(mediaPath),
+        }];
+
+        const message: InboundMessage = {
+          telegramMessageId: ctx.message.message_id,
+          telegramChatId: ctx.chat.id,
+          sender: ctx.from?.username || ctx.from?.first_name || 'user',
+          senderName: this.getSenderName(ctx),
+          content: ctx.message.caption || 'The user sent a photo.',
+          timestamp: new Date(ctx.message.date * 1000).toISOString(),
+          media,
+        };
+
+        logger.debug(
+          { chatId, sender: message.sender, hasCaption: !!ctx.message.caption },
+          'Telegram photo received',
+        );
+
+        this.onMessage(chatId, message);
+      } catch (err) {
+        logger.error({ err, chatId }, 'Failed to download Telegram photo');
+      }
+    });
+
     // Error handler
     this.bot.catch((err) => {
       logger.error({ error: err.message }, 'Telegram bot error');
@@ -106,6 +149,34 @@ export class TelegramChannel implements Channel {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Download a file from Telegram servers to the local media directory.
+   * Returns the absolute path to the downloaded file.
+   */
+  private async downloadTelegramFile(fileId: string): Promise<string> {
+    const file = await this.bot.api.getFile(fileId);
+    const filePath = file.file_path;
+    if (!filePath) throw new Error('Telegram returned no file_path');
+
+    const downloadUrl = `https://api.telegram.org/file/bot${this.bot.token}/${filePath}`;
+    const response = await fetch(downloadUrl);
+    if (!response.ok) throw new Error(`Failed to download file: ${response.status}`);
+
+    // Save to data/media/ directory
+    const mediaDir = path.join(DATA_DIR, 'media');
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    const ext = path.extname(filePath) || '.jpg';
+    const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const localPath = path.join(mediaDir, filename);
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(localPath, buffer);
+
+    logger.debug({ fileId, localPath, size: buffer.length }, 'Downloaded Telegram file');
+    return localPath;
   }
 
   private getSenderName(ctx: Context): string {
@@ -169,6 +240,36 @@ export class TelegramChannel implements Channel {
         } else {
           throw err;
         }
+      }
+    }
+  }
+
+  async sendPhoto(chatId: string, photoPath: string, caption?: string): Promise<void> {
+    const numericChatId = parseInt(chatId, 10);
+    if (isNaN(numericChatId)) {
+      logger.error({ chatId }, 'Invalid chat ID for Telegram sendPhoto');
+      return;
+    }
+
+    if (!fs.existsSync(photoPath)) {
+      logger.error({ photoPath }, 'Photo file not found');
+      return;
+    }
+
+    try {
+      const inputFile = new InputFile(photoPath);
+      await this.bot.api.sendPhoto(numericChatId, inputFile, {
+        caption: caption || undefined,
+        parse_mode: caption ? 'Markdown' : undefined,
+      });
+      logger.debug({ chatId, photoPath }, 'Photo sent via Telegram');
+    } catch (err) {
+      // If Markdown parsing fails for caption, try plain
+      if (caption && err instanceof Error && err.message.includes("can't parse entities")) {
+        const inputFile = new InputFile(photoPath);
+        await this.bot.api.sendPhoto(numericChatId, inputFile, { caption });
+      } else {
+        throw err;
       }
     }
   }

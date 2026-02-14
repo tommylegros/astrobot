@@ -18,8 +18,15 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions.js';
 
+interface MediaAttachment {
+  type: 'image';
+  path: string;
+  mimeType: string;
+}
+
 interface ContainerInput {
   prompt: string;
+  media?: MediaAttachment[];
   agentId: string;
   agentName: string;
   model: string;
@@ -93,21 +100,26 @@ function shouldClose(): boolean {
   return false;
 }
 
-function drainIpcInput(): string[] {
+interface IpcMessage {
+  text: string;
+  media?: Array<{ type: string; path: string; mimeType: string }>;
+}
+
+function drainIpcInput(): IpcMessage[] {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
     const files = fs.readdirSync(IPC_INPUT_DIR)
       .filter(f => f.endsWith('.json'))
       .sort();
 
-    const messages: string[] = [];
+    const messages: IpcMessage[] = [];
     for (const file of files) {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         fs.unlinkSync(filePath);
         if (data.type === 'message' && data.text) {
-          messages.push(data.text);
+          messages.push({ text: data.text, media: data.media });
         }
       } catch (err) {
         log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);
@@ -121,7 +133,44 @@ function drainIpcInput(): string[] {
   }
 }
 
-function waitForIpcMessage(): Promise<string | null> {
+/**
+ * Build a multimodal content array for OpenRouter from text and optional media.
+ */
+function buildMultimodalContent(
+  text: string,
+  media?: Array<{ type: string; path: string; mimeType: string }>,
+): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
+  if (!media || media.length === 0) return text;
+
+  const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+
+  // Add text part first
+  if (text) {
+    parts.push({ type: 'text', text });
+  }
+
+  // Add image parts as base64 data URIs
+  for (const m of media) {
+    if (m.type === 'image') {
+      try {
+        const imageData = fs.readFileSync(m.path);
+        const base64 = imageData.toString('base64');
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${m.mimeType};base64,${base64}` },
+        });
+        log(`Attached image: ${m.path} (${imageData.length} bytes)`);
+      } catch (err) {
+        log(`Failed to read image ${m.path}: ${err instanceof Error ? err.message : String(err)}`);
+        parts.push({ type: 'text', text: `[Failed to load image: ${m.path}]` });
+      }
+    }
+  }
+
+  return parts.length === 1 && parts[0].type === 'text' ? (parts[0].text || text) : parts;
+}
+
+function waitForIpcMessage(): Promise<IpcMessage | null> {
   return new Promise((resolve) => {
     const poll = () => {
       if (shouldClose()) {
@@ -130,7 +179,13 @@ function waitForIpcMessage(): Promise<string | null> {
       }
       const messages = drainIpcInput();
       if (messages.length > 0) {
-        resolve(messages.join('\n'));
+        // Combine multiple text messages but keep media from all
+        const combinedText = messages.map(m => m.text).join('\n');
+        const combinedMedia = messages.flatMap(m => m.media || []);
+        resolve({
+          text: combinedText,
+          media: combinedMedia.length > 0 ? combinedMedia : undefined,
+        });
         return;
       }
       setTimeout(poll, IPC_POLL_MS);
@@ -300,9 +355,10 @@ async function runAgentLoop(
 
     // Check for IPC messages during tool execution
     const ipcMessages = drainIpcInput();
-    for (const text of ipcMessages) {
-      log(`IPC message during tool loop: ${text.length} chars`);
-      messages.push({ role: 'user', content: text });
+    for (const ipcMsg of ipcMessages) {
+      log(`IPC message during tool loop: ${ipcMsg.text.length} chars, media: ${ipcMsg.media?.length || 0}`);
+      const ipcContent = buildMultimodalContent(ipcMsg.text, ipcMsg.media);
+      messages.push({ role: 'user', content: ipcContent as string });
     }
   }
 
@@ -344,6 +400,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Expose secrets as env vars so MCP child processes can access them
+  if (containerInput.secrets) {
+    for (const [key, value] of Object.entries(containerInput.secrets)) {
+      process.env[key] = value;
+    }
+  }
+
   const openai = new OpenAI({
     baseURL: 'https://openrouter.ai/api/v1',
     apiKey,
@@ -363,15 +426,28 @@ async function main(): Promise<void> {
   // Build initial conversation
   const messages: ChatCompletionMessageParam[] = [];
 
-  // Add initial prompt
+  // Add initial prompt (with optional media for multimodal input)
   let prompt = containerInput.prompt;
+  let initialMedia: Array<{ type: string; path: string; mimeType: string }> | undefined =
+    containerInput.media?.map(m => ({
+      type: m.type as string,
+      path: m.path,
+      mimeType: m.mimeType,
+    }));
+
   const pending = drainIpcInput();
   if (pending.length > 0) {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
-    prompt += '\n' + pending.join('\n');
+    prompt += '\n' + pending.map(p => p.text).join('\n');
+    // Merge media from pending messages
+    const pendingMedia = pending.flatMap(p => p.media || []);
+    if (pendingMedia.length > 0) {
+      initialMedia = [...(initialMedia || []), ...pendingMedia];
+    }
   }
 
-  messages.push({ role: 'user', content: prompt });
+  const initialContent = buildMultimodalContent(prompt, initialMedia);
+  messages.push({ role: 'user', content: initialContent as string });
 
   // Query loop: run agent → wait for IPC message → run again → repeat
   try {
@@ -406,14 +482,15 @@ async function main(): Promise<void> {
       log('Agent loop complete, waiting for next IPC message...');
 
       // Wait for next message or close
-      const nextMessage = await waitForIpcMessage();
-      if (nextMessage === null) {
+      const nextIpc = await waitForIpcMessage();
+      if (nextIpc === null) {
         log('Close sentinel received, exiting');
         break;
       }
 
-      log(`Got new message (${nextMessage.length} chars), continuing conversation`);
-      messages.push({ role: 'user', content: nextMessage });
+      log(`Got new message (${nextIpc.text.length} chars, media: ${nextIpc.media?.length || 0}), continuing conversation`);
+      const nextContent = buildMultimodalContent(nextIpc.text, nextIpc.media);
+      messages.push({ role: 'user', content: nextContent as string });
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

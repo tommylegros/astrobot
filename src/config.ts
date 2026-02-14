@@ -56,6 +56,10 @@ export const DEFAULT_AGENT_MODEL =
 export const EMBEDDING_MODEL =
   process.env.EMBEDDING_MODEL || 'openai/text-embedding-3-small';
 
+// Model used for image generation
+export const IMAGE_GEN_MODEL =
+  process.env.IMAGE_GEN_MODEL || 'google/gemini-3-pro-image-preview';
+
 // ── Telegram ────────────────────────────────────────────────────────
 
 // Can be a direct token or a 1Password reference (op://...)

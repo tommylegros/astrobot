@@ -106,7 +106,7 @@ async function main(): Promise<void> {
       currentChatId = chatId;
 
       // Route to orchestrator
-      handleMessage(chatId, msg.senderName, msg.content).catch((err) => {
+      handleMessage(chatId, msg.senderName, msg.content, msg.media).catch((err) => {
         logger.error({ err, chatId }, 'Error handling message');
       });
     },

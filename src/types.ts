@@ -1,9 +1,20 @@
+// ── Media types ─────────────────────────────────────────────────────
+
+export interface MediaAttachment {
+  type: 'image';
+  /** File path (host-side or container-side depending on context) */
+  path: string;
+  mimeType: string;
+  filename?: string;
+}
+
 // ── Channel abstraction ─────────────────────────────────────────────
 
 export interface Channel {
   name: string;
   connect(): Promise<void>;
   sendMessage(chatId: string, text: string): Promise<void>;
+  sendPhoto?(chatId: string, photoPath: string, caption?: string): Promise<void>;
   isConnected(): boolean;
   disconnect(): Promise<void>;
   setTyping?(chatId: string, isTyping: boolean): Promise<void>;
@@ -19,12 +30,14 @@ export interface InboundMessage {
   senderName: string;
   content: string;
   timestamp: string;
+  media?: MediaAttachment[];
 }
 
 // ── Container types ─────────────────────────────────────────────────
 
 export interface ContainerInput {
   prompt: string;
+  media?: MediaAttachment[];
   agentId: string;
   agentName: string;
   model: string;

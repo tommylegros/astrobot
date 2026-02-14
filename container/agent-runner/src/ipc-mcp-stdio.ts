@@ -63,6 +63,38 @@ You can call this multiple times.`,
   },
 );
 
+// ── send_image ──────────────────────────────────────────────────────
+
+server.tool(
+  'send_image',
+  `Send an image to the user via Telegram.
+Use this after generating an image (with the generate_image tool) or when you have an image file to share.
+The image must be a file path accessible in the container (e.g., /workspace/ipc/media/...).`,
+  {
+    image_path: z.string().describe('Absolute file path to the image (e.g., /workspace/ipc/media/generated-123.png)'),
+    caption: z.string().optional().describe('Optional caption to display with the image'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.image_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `Image file not found: ${args.image_path}` }],
+        isError: true,
+      };
+    }
+
+    writeIpcFile(MESSAGES_DIR, {
+      type: 'image',
+      path: args.image_path,
+      caption: args.caption || undefined,
+      agentId,
+      agentName,
+      timestamp: new Date().toISOString(),
+    });
+
+    return { content: [{ type: 'text' as const, text: 'Image sent.' }] };
+  },
+);
+
 // ── delegate_to_agent ───────────────────────────────────────────────
 
 server.tool(

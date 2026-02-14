@@ -82,7 +82,18 @@ export async function getMCPServersForAgent(
     },
   });
 
-  // 3. Global MCP servers from database
+  // 3. Built-in Image Generation MCP server (always included)
+  servers.push({
+    name: 'astrobot_image_gen',
+    transport: 'stdio',
+    command: 'node',
+    args: ['/tmp/dist/image-gen-mcp.js'],
+    env: {
+      IMAGE_GEN_MODEL: process.env.IMAGE_GEN_MODEL || 'google/gemini-3-pro-image-preview',
+    },
+  });
+
+  // 4. Global MCP servers from database
   try {
     const globalServers = await getMCPServers('global');
     for (const s of globalServers) {
@@ -99,7 +110,7 @@ export async function getMCPServersForAgent(
     logger.warn({ err }, 'Failed to load global MCP servers from DB');
   }
 
-  // 4. Agent-specific MCP servers from agent definition
+  // 5. Agent-specific MCP servers from agent definition
   const agentServers = (agent.mcp_servers || []) as MCPServerConfig[];
   for (const s of agentServers) {
     // Don't duplicate built-in servers

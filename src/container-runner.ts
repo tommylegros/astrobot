@@ -165,7 +165,7 @@ export async function runContainerAgent(
   // Prepare IPC directories — must be world-writable so the non-root agent
   // container (runs as UID 1000 "node") can read/write/delete files in them.
   const agentIpcDir = path.join(DATA_DIR, 'ipc', input.agentId);
-  for (const sub of ['messages', 'tasks', 'input']) {
+  for (const sub of ['messages', 'tasks', 'input', 'media']) {
     const dir = path.join(agentIpcDir, sub);
     fs.mkdirSync(dir, { recursive: true });
     try { fs.chmodSync(dir, 0o777); } catch { /* best effort */ }
@@ -501,16 +501,47 @@ export async function runContainerAgent(
 
 /**
  * Send a follow-up message to an active agent container via IPC.
+ * Optionally includes media attachments (images).
  */
-export function sendIpcMessage(agentId: string, text: string): boolean {
+export function sendIpcMessage(
+  agentId: string,
+  text: string,
+  media?: Array<{ type: string; path: string; mimeType: string }>,
+): boolean {
   const inputDir = path.join(DATA_DIR, 'ipc', agentId, 'input');
   try {
     fs.mkdirSync(inputDir, { recursive: true });
     try { fs.chmodSync(inputDir, 0o777); } catch { /* best effort */ }
+
+    // If there are media attachments, copy them into the agent's IPC media dir
+    // and rewrite paths to container-side paths
+    let containerMedia: Array<{ type: string; path: string; mimeType: string }> | undefined;
+    if (media && media.length > 0) {
+      const mediaDir = path.join(DATA_DIR, 'ipc', agentId, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      try { fs.chmodSync(mediaDir, 0o777); } catch { /* best effort */ }
+
+      containerMedia = media.map((m) => {
+        const ext = path.extname(m.path) || '.jpg';
+        const mediaFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+        const destPath = path.join(mediaDir, mediaFilename);
+        fs.copyFileSync(m.path, destPath);
+        try { fs.chmodSync(destPath, 0o666); } catch { /* best effort */ }
+        return {
+          type: m.type,
+          path: `/workspace/ipc/media/${mediaFilename}`, // container-side path
+          mimeType: m.mimeType,
+        };
+      });
+    }
+
+    const payload: Record<string, unknown> = { type: 'message', text };
+    if (containerMedia) payload.media = containerMedia;
+
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
     const filepath = path.join(inputDir, filename);
     const tempPath = `${filepath}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }), { mode: 0o666 });
+    fs.writeFileSync(tempPath, JSON.stringify(payload), { mode: 0o666 });
     fs.renameSync(tempPath, filepath);
     return true;
   } catch {
