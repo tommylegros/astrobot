@@ -18,7 +18,10 @@ let pool: pg.Pool;
 export async function initDatabase(connectionString: string): Promise<void> {
   pool = new Pool({ connectionString });
 
-  // Register pgvector type
+  // Run migrations first (creates pgvector extension + tables on fresh DB)
+  await runMigrations();
+
+  // Register pgvector types after migrations ensure the extension exists
   const client = await pool.connect();
   try {
     await pgvector.registerTypes(client);
@@ -26,8 +29,6 @@ export async function initDatabase(connectionString: string): Promise<void> {
     client.release();
   }
 
-  // Run migrations
-  await runMigrations();
   logger.info('Database initialized');
 }
 
