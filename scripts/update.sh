@@ -56,6 +56,17 @@ op_compose() {
   op run --env-file=.env --no-masking -- $COMPOSE "$@"
 }
 
+# Verify op can resolve secrets before doing anything with compose
+verify_op_auth() {
+  if ! op run --env-file=.env --no-masking -- printenv POSTGRES_PASSWORD &>/dev/null; then
+    err "'op run' failed to resolve secrets from .env."
+    info "Ensure 1Password is authenticated:"
+    echo "  export OP_SERVICE_ACCOUNT_TOKEN=\"<your-token>\""
+    echo "  # or: eval \$(op signin)"
+    exit 1
+  fi
+}
+
 # ── Pre-flight ──────────────────────────────────────────────────────
 
 header "Astrobot Update"
@@ -342,6 +353,8 @@ ok "TypeScript compiled"
 # ── Restart services ───────────────────────────────────────────────
 
 header "Restarting services"
+
+verify_op_auth
 
 # Check if services are running
 if op_compose ps --status running 2>/dev/null | grep -q postgres; then

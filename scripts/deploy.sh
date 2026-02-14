@@ -910,6 +910,15 @@ op_compose() {
   op run --env-file=.env --no-masking -- $COMPOSE "$@"
 }
 
+# Verify op_compose resolves secrets correctly
+info "Verifying secret resolution via 'op run'..."
+if ! op run --env-file=.env --no-masking -- printenv POSTGRES_PASSWORD &>/dev/null; then
+  err "'op run' failed to resolve secrets from .env."
+  info "Ensure 1Password is authenticated (OP_SERVICE_ACCOUNT_TOKEN or 'eval \$(op signin)')."
+  exit 1
+fi
+ok "Secret resolution verified"
+
 # ── Install dependencies ───────────────────────────────────────────
 
 header "Installing dependencies"
@@ -932,7 +941,7 @@ run_with_timer "Compiling host TypeScript service" npm run build
 
 header "Starting services"
 
-run_with_timer "Starting PostgreSQL service" op_compose up -d postgres
+run_with_timer "Starting PostgreSQL service" op_compose up -d --build postgres
 
 # Wait for postgres to be healthy
 info "Waiting for PostgreSQL to be ready..."
@@ -954,7 +963,7 @@ fi
 ok "PostgreSQL is ready"
 
 info "Starting Astrobot..."
-run_with_timer "Starting Astrobot service" op_compose up -d astrobot
+run_with_timer "Starting Astrobot service" op_compose up -d --build astrobot
 ok "Astrobot is running and accepting messages"
 
 # ── Verify ─────────────────────────────────────────────────────────
@@ -974,12 +983,15 @@ echo "  Telegram token:      $TELEGRAM_REF"
 echo "  OpenRouter key:      $OPENROUTER_REF"
 echo "  Postgres password:   $POSTGRES_REF"
 echo ""
-echo -e "${BOLD}NOTE:${NC} All secrets are op:// references. Use 'op run' to resolve them:"
+echo -e "${BOLD}NOTE:${NC} All secrets are op:// references resolved at runtime."
 echo ""
-echo "Commands:"
-echo "  op run --env-file=.env -- $COMPOSE logs -f astrobot     # View logs"
-echo "  op run --env-file=.env -- $COMPOSE restart astrobot     # Restart"
-echo "  op run --env-file=.env -- $COMPOSE down                 # Stop all"
-echo "  ./scripts/update.sh                                     # Update to latest"
+echo "Manage services:"
+echo "  ./scripts/update.sh                  # Pull, rebuild, restart"
+echo "  ./scripts/update.sh --reconfigure    # Change models/credentials"
+echo ""
+echo "Manual compose commands (requires 'op run' wrapper):"
+echo "  op run --env-file=.env -- $COMPOSE logs -f astrobot"
+echo "  op run --env-file=.env -- $COMPOSE restart astrobot"
+echo "  op run --env-file=.env -- $COMPOSE down"
 echo ""
 echo "Open Telegram and message your bot to get started!"

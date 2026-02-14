@@ -21,9 +21,21 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 // ── Database ────────────────────────────────────────────────────────
 
-// Can be a direct connection string or a 1Password reference (op://...)
+// Build DATABASE_URL from individual components when not set directly.
+// This avoids URL-escaping issues when the password contains special characters.
+function buildDatabaseUrl(): string {
+  const password = process.env.POSTGRES_PASSWORD || 'astrobot';
+  const user = process.env.POSTGRES_USER || 'astrobot';
+  const host = process.env.POSTGRES_HOST || 'postgres';
+  const port = process.env.POSTGRES_PORT || '5432';
+  const db = process.env.POSTGRES_DB || 'astrobot';
+  return `postgresql://${user}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
+}
+
+// Can be a direct connection string, a 1Password reference (op://...), or
+// auto-constructed from POSTGRES_PASSWORD with proper URL encoding.
 export const DATABASE_URL_REF =
-  process.env.DATABASE_URL || process.env.DATABASE_URL_REF || 'postgresql://astrobot:astrobot@localhost:5432/astrobot';
+  process.env.DATABASE_URL || process.env.DATABASE_URL_REF || buildDatabaseUrl();
 
 // ── OpenRouter ──────────────────────────────────────────────────────
 
