@@ -40,6 +40,14 @@ services:
       NODE_ENV: production
       # Host project path for Docker-in-Docker bind mounts (agent containers)
       HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-${PWD}}
+      # ── MCP server secrets (passed to agent containers via ${VAR_NAME} refs) ──
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_TEAM_ID: ${SLACK_TEAM_ID:-}
+      SLACK_CHANNEL_IDS: ${SLACK_CHANNEL_IDS:-}
+      TODOIST_API_KEY: ${TODOIST_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
 
 volumes:
   pgdata:

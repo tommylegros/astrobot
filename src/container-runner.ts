@@ -183,6 +183,12 @@ export async function runContainerAgent(
   const agentWorkDir = path.join(DATA_DIR, 'workspaces', input.agentId);
   fs.mkdirSync(agentWorkDir, { recursive: true });
 
+  // Prepare persistent MCP data directory (shared across all containers).
+  // Used for OAuth credentials (Google Workspace), browser profiles, etc.
+  const mcpDataDir = path.join(DATA_DIR, 'mcp-data');
+  fs.mkdirSync(mcpDataDir, { recursive: true });
+  try { fs.chmodSync(mcpDataDir, 0o777); } catch { /* best effort */ }
+
   const safeName = input.agentName.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `astrobot-${safeName}-${Date.now()}`;
 
@@ -229,10 +235,12 @@ export async function runContainerAgent(
   const hostDataDir = path.join(hostProjectDir, 'data');
   const hostIpcDir = path.join(hostDataDir, 'ipc', input.agentId);
   const hostWorkDir = path.join(hostDataDir, 'workspaces', input.agentId);
+  const hostMcpDataDir = path.join(hostDataDir, 'mcp-data');
 
   const binds = [
     `${hostIpcDir}:/workspace/ipc`,
     `${hostWorkDir}:/workspace/agent`,
+    `${hostMcpDataDir}:/workspace/mcp-data`,
   ];
 
   // Environment variables for the container

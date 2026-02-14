@@ -1,0 +1,87 @@
+-- ─────────────────────────────────────────────────────────────────────
+-- Migration 002: Seed external MCP servers
+--
+-- Registers five external MCP servers as global tools available to all
+-- agents. Env values use ${VAR_NAME} syntax — resolved from the host's
+-- process.env at container launch time (see container-runner.ts).
+--
+-- ON CONFLICT DO NOTHING: safe to re-run; won't overwrite user changes.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 1. Slack — workspace messaging, channel history, reactions
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'slack',
+  'stdio',
+  'npx',
+  '["-y", "@zencoderai/slack-mcp-server"]'::jsonb,
+  NULL,
+  '{
+    "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+    "SLACK_TEAM_ID": "${SLACK_TEAM_ID}",
+    "SLACK_CHANNEL_IDS": "${SLACK_CHANNEL_IDS}"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
+
+-- 2. Todoist — task management, projects, labels, comments
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'todoist',
+  'stdio',
+  'npx',
+  '["-y", "todoist-mcp"]'::jsonb,
+  NULL,
+  '{
+    "API_KEY": "${TODOIST_API_KEY}"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
+
+-- 3. Playwright — headless browser automation (Chromium pre-installed)
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'playwright',
+  'stdio',
+  'npx',
+  '["-y", "@playwright/mcp", "--headless", "--browser", "chromium", "--no-chromium-sandbox"]'::jsonb,
+  NULL,
+  '{
+    "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": "/usr/bin/chromium",
+    "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
+
+-- 4. Brave Search — web, local, image, video, news search + AI summaries
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'brave_search',
+  'stdio',
+  'npx',
+  '["-y", "@brave/brave-search-mcp-server"]'::jsonb,
+  NULL,
+  '{
+    "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
+
+-- 5. Google Workspace — Gmail, Calendar, Drive, Docs, Sheets, etc.
+--    NOTE: Requires one-time OAuth flow. Credentials persist in /workspace/mcp-data/.
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'google_workspace',
+  'stdio',
+  'uvx',
+  '["workspace-mcp"]'::jsonb,
+  NULL,
+  '{
+    "GOOGLE_OAUTH_CLIENT_ID": "${GOOGLE_OAUTH_CLIENT_ID}",
+    "GOOGLE_OAUTH_CLIENT_SECRET": "${GOOGLE_OAUTH_CLIENT_SECRET}",
+    "OAUTHLIB_INSECURE_TRANSPORT": "1",
+    "GOOGLE_MCP_CREDENTIALS_DIR": "/workspace/mcp-data/google-workspace",
+    "UV_CACHE_DIR": "/opt/uv-cache"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
