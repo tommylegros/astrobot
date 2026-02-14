@@ -1054,7 +1054,9 @@ $line"
     read -r APP_STORE_CONNECT_VENDOR_NUMBER_VAL
 
     if [[ -n "${ASC_KEY_VAL:-}" && -n "${ASC_ISSUER_VAL:-}" && -n "${ASC_P8_VAL:-}" ]]; then
-      local_fields=("key id=$ASC_KEY_VAL" "issuer id=$ASC_ISSUER_VAL" "private key=$ASC_P8_VAL")
+      # Base64-encode the .p8 key so it survives env var transport (PEM is multiline)
+      ASC_P8_B64="$(printf '%s' "$ASC_P8_VAL" | base64 | tr -d '\n')"
+      local_fields=("key id=$ASC_KEY_VAL" "issuer id=$ASC_ISSUER_VAL" "private key=$ASC_P8_B64")
       [[ -n "${APP_STORE_CONNECT_VENDOR_NUMBER_VAL:-}" ]] && local_fields+=("vendor number=$APP_STORE_CONNECT_VENDOR_NUMBER_VAL")
       create_1password_item \
         "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
@@ -1063,7 +1065,7 @@ $line"
       APP_STORE_CONNECT_KEY_ID_REF="op://$VAULT_NAME/$ITEM_NAME/key id"
       APP_STORE_CONNECT_ISSUER_ID_REF="op://$VAULT_NAME/$ITEM_NAME/issuer id"
       APP_STORE_CONNECT_P8_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/private key"
-      ok "App Store Connect credentials stored in 1Password"
+      ok "App Store Connect credentials stored in 1Password (key base64-encoded)"
     else
       warn "Skipping App Store Connect (Key ID, Issuer ID, or private key missing)"
     fi

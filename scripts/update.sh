@@ -639,7 +639,9 @@ $line"
         read -r ASC_VENDOR_VAL
 
         if [[ -n "${ASC_KEY_VAL:-}" && -n "${ASC_ISSUER_VAL:-}" && -n "${ASC_P8_VAL:-}" ]]; then
-          local_fields=("key id=$ASC_KEY_VAL" "issuer id=$ASC_ISSUER_VAL" "private key=$ASC_P8_VAL")
+          # Base64-encode the .p8 key so it survives env var transport (PEM is multiline)
+          ASC_P8_B64="$(printf '%s' "$ASC_P8_VAL" | base64 | tr -d '\n')"
+          local_fields=("key id=$ASC_KEY_VAL" "issuer id=$ASC_ISSUER_VAL" "private key=$ASC_P8_B64")
           [[ -n "${ASC_VENDOR_VAL:-}" ]] && local_fields+=("vendor number=$ASC_VENDOR_VAL")
           create_1password_item "$VAULT_NAME" "App Store Connect" "API Credential" \
             "${local_fields[@]}" || warn "Failed to store App Store Connect credentials"

@@ -18,13 +18,18 @@ SET command = 'sh',
     args = '["-c", "cd /workspace/agent && exec uvx workspace-mcp"]'::jsonb
 WHERE name = 'google_workspace';
 
--- Add App Store Connect MCP server (idempotent — skips if already exists)
+-- Fix App Store Connect: base64-decode the .p8 key (multiline PEM breaks env vars)
+UPDATE mcp_servers
+SET args = '["-c", "printf ''%s'' \"$APP_STORE_CONNECT_P8_KEY\" | base64 -d > /tmp/asc-authkey.p8 && exec npx -y appstore-connect-mcp-server"]'::jsonb
+WHERE name = 'app_store_connect';
+
+-- Add App Store Connect MCP server if it doesn't exist yet
 INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
 VALUES (
   'app_store_connect',
   'stdio',
   'sh',
-  '["-c", "printf ''%s'' \"$APP_STORE_CONNECT_P8_KEY\" > /tmp/asc-authkey.p8 && exec npx -y appstore-connect-mcp-server"]'::jsonb,
+  '["-c", "printf ''%s'' \"$APP_STORE_CONNECT_P8_KEY\" | base64 -d > /tmp/asc-authkey.p8 && exec npx -y appstore-connect-mcp-server"]'::jsonb,
   NULL,
   '{
     "APP_STORE_CONNECT_KEY_ID": "${APP_STORE_CONNECT_KEY_ID}",

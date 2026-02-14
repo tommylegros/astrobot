@@ -88,14 +88,14 @@ VALUES (
 ) ON CONFLICT (name) DO NOTHING;
 
 -- 6. App Store Connect — manage apps, beta testers, versions, analytics, sales reports
---    The .p8 private key is stored in 1Password and passed as APP_STORE_CONNECT_P8_KEY.
---    A shell wrapper writes it to a temp file at launch (the MCP server expects a file path).
+--    The .p8 private key is base64-encoded in 1Password / env to avoid multiline issues.
+--    The shell wrapper decodes it to a temp file at launch (the MCP server expects a file path).
 INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
 VALUES (
   'app_store_connect',
   'stdio',
   'sh',
-  '["-c", "printf ''%s'' \"$APP_STORE_CONNECT_P8_KEY\" > /tmp/asc-authkey.p8 && exec npx -y appstore-connect-mcp-server"]'::jsonb,
+  '["-c", "printf ''%s'' \"$APP_STORE_CONNECT_P8_KEY\" | base64 -d > /tmp/asc-authkey.p8 && exec npx -y appstore-connect-mcp-server"]'::jsonb,
   NULL,
   '{
     "APP_STORE_CONNECT_KEY_ID": "${APP_STORE_CONNECT_KEY_ID}",
