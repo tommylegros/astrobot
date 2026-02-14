@@ -76,8 +76,8 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-# Source current config for display
-source <(grep -v '^\s*#' .env | grep '=' | sed 's/^/export /')
+# Source current config for display (quote values to handle spaces in op:// refs)
+source <(grep -v '^\s*#' .env | grep '=' | sed 's/^\([^=]*\)=\(.*\)/export \1="\2"/')
 
 echo "Current configuration:"
 echo "  Assistant:           ${ASSISTANT_NAME:-Nano}"
@@ -404,7 +404,7 @@ fi
 header "Update complete"
 
 # Re-source .env to show current values
-source <(grep -v '^\s*#' .env | grep '=' | sed 's/^/export /' 2>/dev/null) 2>/dev/null || true
+source <(grep -v '^\s*#' .env | grep '=' | sed 's/^\([^=]*\)=\(.*\)/export \1="\2"/' 2>/dev/null) 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}${BOLD}Astrobot v2 updated successfully!${NC}"
