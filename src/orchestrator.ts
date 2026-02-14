@@ -15,7 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, IDLE_TIMEOUT, ORCHESTRATOR_TTL } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, DATABASE_URL_REF, IDLE_TIMEOUT, ORCHESTRATOR_TTL } from './config.js';
 import {
   runContainerAgent,
   sendIpcMessage,
@@ -203,7 +203,7 @@ Example flow:
 - Your conversation persists until the user sends /clear or 8 hours pass`;
 
   // Resolve database URL for memory MCP
-  const databaseUrl = await resolveSecret('DATABASE_URL');
+  const databaseUrl = await resolveSecret('DATABASE_URL', undefined, DATABASE_URL_REF);
 
   // Get MCP servers for this agent
   const mcpServers = await getMCPServersForAgent(state.agent, databaseUrl);
@@ -390,7 +390,7 @@ async function handleDelegation(
     'Delegating task to specialist',
   );
 
-  const databaseUrl = await resolveSecret('DATABASE_URL');
+  const databaseUrl = await resolveSecret('DATABASE_URL', undefined, DATABASE_URL_REF);
   const mcpServers = await getMCPServersForAgent(targetAgent, databaseUrl);
 
   const result = await runContainerAgent({
