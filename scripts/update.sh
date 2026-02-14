@@ -386,7 +386,7 @@ if [[ "$SETUP_MCP" == true ]]; then
     MCP_CHANGED=false
 
     # -- Slack --
-    CURRENT_SLACK="$(grep '^SLACK_BOT_TOKEN=' .env 2>/dev/null | cut -d= -f2-)"
+    CURRENT_SLACK="$(grep '^SLACK_BOT_TOKEN=' .env 2>/dev/null | cut -d= -f2-)" || true
     if [[ -n "$CURRENT_SLACK" ]]; then
       ok "Slack: already configured"
     elif confirm "Set up Slack?"; then
@@ -444,7 +444,7 @@ if [[ "$SETUP_MCP" == true ]]; then
     fi
 
     # -- Todoist --
-    CURRENT_TODOIST="$(grep '^TODOIST_API_KEY=' .env 2>/dev/null | cut -d= -f2-)"
+    CURRENT_TODOIST="$(grep '^TODOIST_API_KEY=' .env 2>/dev/null | cut -d= -f2-)" || true
     if [[ -n "$CURRENT_TODOIST" ]]; then
       ok "Todoist: already configured"
     elif confirm "Set up Todoist?"; then
@@ -486,7 +486,7 @@ if [[ "$SETUP_MCP" == true ]]; then
     fi
 
     # -- Brave Search --
-    CURRENT_BRAVE="$(grep '^BRAVE_API_KEY=' .env 2>/dev/null | cut -d= -f2-)"
+    CURRENT_BRAVE="$(grep '^BRAVE_API_KEY=' .env 2>/dev/null | cut -d= -f2-)" || true
     if [[ -n "$CURRENT_BRAVE" ]]; then
       ok "Brave Search: already configured"
     elif confirm "Set up Brave Search?"; then
@@ -528,7 +528,7 @@ if [[ "$SETUP_MCP" == true ]]; then
     fi
 
     # -- Google Workspace --
-    CURRENT_GOOGLE="$(grep '^GOOGLE_OAUTH_CLIENT_ID=' .env 2>/dev/null | cut -d= -f2-)"
+    CURRENT_GOOGLE="$(grep '^GOOGLE_OAUTH_CLIENT_ID=' .env 2>/dev/null | cut -d= -f2-)" || true
     if [[ -n "$CURRENT_GOOGLE" ]]; then
       ok "Google Workspace: already configured"
     elif confirm "Set up Google Workspace (Gmail, Calendar, Drive, Docs, Sheets)?"; then
