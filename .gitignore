@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local data & runtime state
+data/
+store/
+logs/
+
+# Secrets
+*.keys.json
+.env
+.env.backup*
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

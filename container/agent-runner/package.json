@@ -1,0 +1,23 @@
+{
+  "name": "astrobot-agent-runner",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Container-side agent runner for Astrobot v2 (OpenRouter)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "openai": "^4.85.0",
+    "pg": "^8.13.1",
+    "pgvector": "^0.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/pg": "^8.11.11",
+    "typescript": "^5.7.3"
+  }
+}
