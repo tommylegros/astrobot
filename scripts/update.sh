@@ -51,6 +51,11 @@ else
   exit 1
 fi
 
+# All compose commands resolve op:// references at runtime via 'op run'
+op_compose() {
+  op run --env-file=.env --no-masking -- $COMPOSE "$@"
+}
+
 # ── Pre-flight ──────────────────────────────────────────────────────
 
 header "Astrobot Update"
@@ -142,7 +147,10 @@ fi
 if [[ "$RECONFIGURE" == true ]]; then
   header "Reconfigure"
 
-  VAULT_NAME="Astrobot"
+  # Read vault name from .env (set by deploy.sh)
+  VAULT_NAME="$(grep '^OP_VAULT=' .env 2>/dev/null | cut -d= -f2- || echo "Astrobot")"
+  VAULT_NAME="${VAULT_NAME:-Astrobot}"
+  info "Using 1Password vault: $VAULT_NAME"
 
   # Check 1Password sign-in
   if ! op whoami &>/dev/null 2>&1; then
@@ -150,6 +158,8 @@ if [[ "$RECONFIGURE" == true ]]; then
     warn "Skipping credential reconfiguration."
   else
     # -- Rotate credentials? --
+    # Since .env contains op:// references, credential rotation only
+    # updates the value in 1Password — .env stays unchanged.
     echo ""
     if confirm "Rotate Telegram bot token?"; then
       ask "New Telegram Bot Token:"
@@ -157,10 +167,8 @@ if [[ "$RECONFIGURE" == true ]]; then
       echo ""
       if [[ -n "$NEW_TOKEN" ]]; then
         op item edit "Telegram Bot" --vault "$VAULT_NAME" "token=$NEW_TOKEN" >/dev/null 2>&1 || \
-          op item create --category=api-credential --vault="$VAULT_NAME" --title="Telegram Bot" "token=$NEW_TOKEN" >/dev/null
-        # Update .env with the new resolved value
-        sed -i.bak "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=$NEW_TOKEN|" .env && rm -f .env.bak
-        ok "Telegram token updated in 1Password and .env"
+          warn "Could not update 1Password item 'Telegram Bot'"
+        ok "Telegram token updated in 1Password (op:// ref in .env resolves automatically)"
       fi
     fi
 
@@ -170,10 +178,8 @@ if [[ "$RECONFIGURE" == true ]]; then
       echo ""
       if [[ -n "$NEW_KEY" ]]; then
         op item edit "OpenRouter" --vault "$VAULT_NAME" "api key=$NEW_KEY" >/dev/null 2>&1 || \
-          op item create --category=api-credential --vault="$VAULT_NAME" --title="OpenRouter" "api key=$NEW_KEY" >/dev/null
-        # Update .env with the new resolved value
-        sed -i.bak "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=$NEW_KEY|" .env && rm -f .env.bak
-        ok "OpenRouter key updated in 1Password and .env"
+          warn "Could not update 1Password item 'OpenRouter'"
+        ok "OpenRouter key updated in 1Password (op:// ref in .env resolves automatically)"
       fi
     fi
 
@@ -181,13 +187,10 @@ if [[ "$RECONFIGURE" == true ]]; then
       info "Generating new PostgreSQL password..."
       NEW_PG_PASS=$(op generate-password --length=32 --no-symbols 2>/dev/null || openssl rand -base64 24)
       op item edit "PostgreSQL" --vault "$VAULT_NAME" "password=$NEW_PG_PASS" >/dev/null 2>&1 || \
-        warn "Could not update 1Password item"
-      # Update .env
-      sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$NEW_PG_PASS|" .env && rm -f .env.bak
-      sed -i.bak "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://astrobot:${NEW_PG_PASS}@postgres:5432/astrobot|" .env && rm -f .env.bak
+        warn "Could not update 1Password item 'PostgreSQL'"
       warn "PostgreSQL password changed. You must recreate the postgres volume:"
-      echo "  $COMPOSE down -v && $COMPOSE up -d"
-      ok "PostgreSQL password updated"
+      echo "  op run --env-file=.env -- $COMPOSE down -v && op run --env-file=.env -- $COMPOSE up -d"
+      ok "PostgreSQL password updated in 1Password (op:// ref in .env resolves automatically)"
     fi
   fi
 
@@ -341,15 +344,15 @@ ok "TypeScript compiled"
 header "Restarting services"
 
 # Check if services are running
-if $COMPOSE ps --status running 2>/dev/null | grep -q postgres; then
+if op_compose ps --status running 2>/dev/null | grep -q postgres; then
   info "PostgreSQL is running — keeping it up"
 else
   info "Starting PostgreSQL..."
-  $COMPOSE up -d postgres
+  op_compose up -d postgres
 
   info "Waiting for PostgreSQL..."
   RETRIES=30
-  until $COMPOSE exec -T postgres pg_isready -U astrobot &>/dev/null || [[ $RETRIES -eq 0 ]]; do
+  until op_compose exec -T postgres pg_isready -U astrobot &>/dev/null || [[ $RETRIES -eq 0 ]]; do
     sleep 1
     ((RETRIES--))
   done
@@ -362,7 +365,7 @@ else
 fi
 
 info "Restarting Astrobot..."
-$COMPOSE up -d --build astrobot
+op_compose up -d --build astrobot
 ok "Astrobot restarted"
 
 # ── Health check ───────────────────────────────────────────────────
@@ -371,15 +374,15 @@ header "Health check"
 
 sleep 3
 
-if $COMPOSE ps --status running 2>/dev/null | grep -q astrobot; then
+if op_compose ps --status running 2>/dev/null | grep -q astrobot; then
   ok "Astrobot is running"
 else
   # Fallback check for older docker-compose
-  if $COMPOSE ps 2>/dev/null | grep -q "Up"; then
+  if op_compose ps 2>/dev/null | grep -q "Up"; then
     ok "Astrobot is running"
   else
     warn "Astrobot may not be running. Check logs:"
-    echo "  $COMPOSE logs --tail=50 astrobot"
+    echo "  op run --env-file=.env -- $COMPOSE logs --tail=50 astrobot"
   fi
 fi
 
@@ -398,7 +401,7 @@ echo "  Orchestrator model:  ${ORCHESTRATOR_MODEL:-not set}"
 echo "  Default agent model: ${DEFAULT_AGENT_MODEL:-not set}"
 echo ""
 echo "Commands:"
-echo "  $COMPOSE logs -f astrobot       # View logs"
-echo "  $COMPOSE restart astrobot       # Restart"
-echo "  ./scripts/update.sh --reconfigure  # Change models/settings"
+echo "  op run --env-file=.env -- $COMPOSE logs -f astrobot    # View logs"
+echo "  op run --env-file=.env -- $COMPOSE restart astrobot    # Restart"
+echo "  ./scripts/update.sh --reconfigure                      # Change models/settings"
 echo ""

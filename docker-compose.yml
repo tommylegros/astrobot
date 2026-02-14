@@ -7,7 +7,6 @@ services:
     environment:
       POSTGRES_DB: astrobot
       POSTGRES_USER: astrobot
-      # deploy.sh resolves the 1Password reference and stores the actual password
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U astrobot"]
@@ -25,7 +24,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://astrobot:${POSTGRES_PASSWORD}@postgres:5432/astrobot
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       ASSISTANT_NAME: ${ASSISTANT_NAME:-Nano}

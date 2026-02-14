@@ -508,6 +508,55 @@ configure_vault() {
   done
 }
 
+create_1password_item() {
+  local vault="$1"
+  local title="$2"
+  local category_hint="$3"
+  shift 3
+
+  local -a category_candidates=()
+  case "$category_hint" in
+    api-credential|API\ Credential)
+      category_candidates=("API Credential" "api-credential")
+      ;;
+    database|Database)
+      category_candidates=("Database" "database")
+      ;;
+    *)
+      category_candidates=("$category_hint")
+      ;;
+  esac
+
+  local category
+  for category in "${category_candidates[@]}"; do
+    if op item create \
+      --category="$category" \
+      --vault="$vault" \
+      --title="$title" \
+      "$@" >/dev/null; then
+      return 0
+    fi
+    warn "Item create failed with category '$category' for '$title'; trying next compatible category..."
+  done
+
+  err "Failed to create 1Password item '$title' in vault '$vault'. Check vault permissions."
+  return 1
+}
+
+find_op_field() {
+  local vault="$1" item="$2"
+  shift 2
+  local field
+  for field in "$@"; do
+    [[ -z "$field" ]] && continue
+    if op read "op://${vault}/${item}/${field}" &>/dev/null; then
+      echo "$field"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # ── Pre-flight checks ──────────────────────────────────────────────
 
 header "Pre-flight checks"
@@ -573,7 +622,11 @@ echo ""
 ITEM_NAME="Telegram Bot"
 if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
   ok "1Password item '$ITEM_NAME' already exists"
-  TELEGRAM_REF="op://$VAULT_NAME/$ITEM_NAME/token"
+  TELEGRAM_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "token" "credential" "password" "value")" || {
+    err "Cannot find a readable secret field on '$ITEM_NAME' in vault '$VAULT_NAME'"
+    exit 1
+  }
+  TELEGRAM_REF="op://$VAULT_NAME/$ITEM_NAME/$TELEGRAM_FIELD"
 else
   echo "You need a Telegram bot token from @BotFather (https://t.me/BotFather)."
   ask "Telegram Bot Token:"
@@ -585,11 +638,11 @@ else
     exit 1
   fi
 
-  op item create \
-    --category=api-credential \
-    --vault="$VAULT_NAME" \
-    --title="$ITEM_NAME" \
-    "token=$TELEGRAM_TOKEN" >/dev/null
+  create_1password_item \
+    "$VAULT_NAME" \
+    "$ITEM_NAME" \
+    "API Credential" \
+    "token=$TELEGRAM_TOKEN" || exit 1
 
   ok "Stored Telegram bot token in 1Password"
   TELEGRAM_REF="op://$VAULT_NAME/$ITEM_NAME/token"
@@ -599,7 +652,11 @@ fi
 ITEM_NAME="OpenRouter"
 if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
   ok "1Password item '$ITEM_NAME' already exists"
-  OPENROUTER_REF="op://$VAULT_NAME/$ITEM_NAME/api key"
+  OPENROUTER_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "password" "value")" || {
+    err "Cannot find a readable secret field on '$ITEM_NAME' in vault '$VAULT_NAME'"
+    exit 1
+  }
+  OPENROUTER_REF="op://$VAULT_NAME/$ITEM_NAME/$OPENROUTER_FIELD"
 else
   echo "You need an OpenRouter API key from https://openrouter.ai/keys"
   ask "OpenRouter API Key:"
@@ -611,11 +668,11 @@ else
     exit 1
   fi
 
-  op item create \
-    --category=api-credential \
-    --vault="$VAULT_NAME" \
-    --title="$ITEM_NAME" \
-    "api key=$OPENROUTER_KEY" >/dev/null
+  create_1password_item \
+    "$VAULT_NAME" \
+    "$ITEM_NAME" \
+    "API Credential" \
+    "api key=$OPENROUTER_KEY" || exit 1
 
   ok "Stored OpenRouter API key in 1Password"
   OPENROUTER_REF="op://$VAULT_NAME/$ITEM_NAME/api key"
@@ -625,20 +682,24 @@ fi
 ITEM_NAME="PostgreSQL"
 if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
   ok "1Password item '$ITEM_NAME' already exists"
-  POSTGRES_REF="op://$VAULT_NAME/$ITEM_NAME/password"
+  POSTGRES_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "password" "credential" "value")" || {
+    err "Cannot find a readable secret field on '$ITEM_NAME' in vault '$VAULT_NAME'"
+    exit 1
+  }
+  POSTGRES_REF="op://$VAULT_NAME/$ITEM_NAME/$POSTGRES_FIELD"
 else
   info "Generating a secure PostgreSQL password..."
   PG_PASSWORD=$(op generate-password --length=32 --no-symbols 2>/dev/null || openssl rand -base64 24)
 
-  op item create \
-    --category=database \
-    --vault="$VAULT_NAME" \
-    --title="$ITEM_NAME" \
+  create_1password_item \
+    "$VAULT_NAME" \
+    "$ITEM_NAME" \
+    "Database" \
     "password=$PG_PASSWORD" \
     "username=astrobot" \
     "database=astrobot" \
     "hostname=postgres" \
-    "port=5432" >/dev/null
+    "port=5432" || exit 1
 
   ok "Stored PostgreSQL credentials in 1Password"
   POSTGRES_REF="op://$VAULT_NAME/$ITEM_NAME/password"
@@ -778,41 +839,47 @@ ok "Advanced settings configured"
 header "Generating .env"
 
 if [[ -f .env ]]; then
-  warn ".env already exists — backing up to .env.backup.$(date +%s)"
-  cp .env ".env.backup.$(date +%s)"
-  ok "Existing .env backed up"
+  BACKUP_NAME=".env.backup.$(date +%s)"
+  warn ".env already exists — backing up to $BACKUP_NAME"
+  cp .env "$BACKUP_NAME"
+  chmod 600 "$BACKUP_NAME"
+  ok "Existing .env backed up (permissions locked)"
 fi
 
-# Resolve secrets for docker-compose (it can't read op:// references natively)
-info "Resolving secrets from 1Password..."
-TELEGRAM_RESOLVED=$(op read "$TELEGRAM_REF" 2>/dev/null)
-OPENROUTER_RESOLVED=$(op read "$OPENROUTER_REF" 2>/dev/null)
-PG_PASS_RESOLVED=$(op read "$POSTGRES_REF" 2>/dev/null)
-ok "Secrets resolved"
+# Validate all 1Password references before writing .env
+info "Validating 1Password references..."
+REFS_VALID=true
+for ref in "$TELEGRAM_REF" "$OPENROUTER_REF" "$POSTGRES_REF"; do
+  if ! op read "$ref" &>/dev/null; then
+    err "Cannot read 1Password reference: $ref"
+    REFS_VALID=false
+  fi
+done
+if [[ "$REFS_VALID" != true ]]; then
+  err "1Password reference validation failed. Check vault permissions and item fields."
+  exit 1
+fi
+ok "All 1Password references validated"
 
 cat > .env << ENVEOF
 # ─────────────────────────────────────────────────────────────────────
 # Astrobot v2 — Generated by deploy.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 #
-# Secrets are stored in 1Password (vault: $VAULT_NAME).
-# This file contains resolved values for docker-compose.
-# To rotate credentials, use: ./scripts/update.sh --reconfigure
+# Secrets are stored as op:// references — NO plaintext secrets in this file.
+# 1Password resolves them at runtime via: op run --env-file=.env -- <command>
 #
-# 1Password references:
-#   Telegram:   $TELEGRAM_REF
-#   OpenRouter: $OPENROUTER_REF
-#   Postgres:   $POSTGRES_REF
+# To rotate credentials: ./scripts/update.sh --reconfigure
 # ─────────────────────────────────────────────────────────────────────
 
-# ── Secrets ─────────────────────────────────────────────────────────
+# ── 1Password Vault ─────────────────────────────────────────────────
 
-TELEGRAM_BOT_TOKEN=$TELEGRAM_RESOLVED
-OPENROUTER_API_KEY=$OPENROUTER_RESOLVED
-POSTGRES_PASSWORD=$PG_PASS_RESOLVED
+OP_VAULT=$VAULT_NAME
 
-# ── Database ────────────────────────────────────────────────────────
+# ── Secrets (resolved at runtime by 'op run') ───────────────────────
 
-DATABASE_URL=postgresql://astrobot:${PG_PASS_RESOLVED}@postgres:5432/astrobot
+TELEGRAM_BOT_TOKEN=$TELEGRAM_REF
+OPENROUTER_API_KEY=$OPENROUTER_REF
+POSTGRES_PASSWORD=$POSTGRES_REF
 
 # ── Bot Configuration ───────────────────────────────────────────────
 
@@ -833,10 +900,15 @@ MAX_CONCURRENT_CONTAINERS=$MAX_CONTAINERS
 LOG_LEVEL=$LOG_LEVEL
 ENVEOF
 
-# Lock down .env permissions — it contains resolved secrets
+# Lock down .env permissions
 chmod 600 .env
 
-ok ".env generated with 1Password references"
+ok ".env generated with op:// references (no plaintext secrets on disk)"
+
+# Define compose wrapper that resolves op:// references at runtime
+op_compose() {
+  op run --env-file=.env --no-masking -- $COMPOSE "$@"
+}
 
 # ── Install dependencies ───────────────────────────────────────────
 
@@ -860,13 +932,13 @@ run_with_timer "Compiling host TypeScript service" npm run build
 
 header "Starting services"
 
-run_with_timer "Starting PostgreSQL service" $COMPOSE up -d postgres
+run_with_timer "Starting PostgreSQL service" op_compose up -d postgres
 
 # Wait for postgres to be healthy
 info "Waiting for PostgreSQL to be ready..."
 RETRIES=30
 ATTEMPT=1
-until $COMPOSE exec -T postgres pg_isready -U astrobot &>/dev/null || [[ $RETRIES -eq 0 ]]; do
+until op_compose exec -T postgres pg_isready -U astrobot &>/dev/null || [[ $RETRIES -eq 0 ]]; do
   if (( ATTEMPT % 5 == 0 )); then
     info "PostgreSQL is still starting... (${ATTEMPT}/30 checks)"
   fi
@@ -876,13 +948,13 @@ until $COMPOSE exec -T postgres pg_isready -U astrobot &>/dev/null || [[ $RETRIE
 done
 
 if [[ $RETRIES -eq 0 ]]; then
-  err "PostgreSQL failed to start. Check: $COMPOSE logs postgres"
+  err "PostgreSQL failed to start. Check: op_compose logs postgres"
   exit 1
 fi
 ok "PostgreSQL is ready"
 
 info "Starting Astrobot..."
-run_with_timer "Starting Astrobot service" $COMPOSE up -d astrobot
+run_with_timer "Starting Astrobot service" op_compose up -d astrobot
 ok "Astrobot is running and accepting messages"
 
 # ── Verify ─────────────────────────────────────────────────────────
@@ -902,10 +974,12 @@ echo "  Telegram token:      $TELEGRAM_REF"
 echo "  OpenRouter key:      $OPENROUTER_REF"
 echo "  Postgres password:   $POSTGRES_REF"
 echo ""
+echo -e "${BOLD}NOTE:${NC} All secrets are op:// references. Use 'op run' to resolve them:"
+echo ""
 echo "Commands:"
-echo "  $COMPOSE logs -f astrobot     # View logs"
-echo "  $COMPOSE restart astrobot     # Restart"
-echo "  $COMPOSE down                 # Stop all"
-echo "  ./scripts/update.sh           # Update to latest"
+echo "  op run --env-file=.env -- $COMPOSE logs -f astrobot     # View logs"
+echo "  op run --env-file=.env -- $COMPOSE restart astrobot     # Restart"
+echo "  op run --env-file=.env -- $COMPOSE down                 # Stop all"
+echo "  ./scripts/update.sh                                     # Update to latest"
 echo ""
 echo "Open Telegram and message your bot to get started!"
