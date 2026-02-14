@@ -15,7 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, DATABASE_URL_REF, IDLE_TIMEOUT, ORCHESTRATOR_TTL } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, DATABASE_URL, IDLE_TIMEOUT, ORCHESTRATOR_TTL } from './config.js';
 import {
   runContainerAgent,
   sendIpcMessage,
@@ -36,7 +36,6 @@ import { storeMemory } from './db.js';
 import { writeAgentsSnapshot } from './agent-snapshot.js';
 import { logger } from './logger.js';
 import { getMCPServersForAgent } from './mcp-registry.js';
-import { resolveSecret } from './credentials.js';
 import { formatOutbound } from './router.js';
 import { Channel, ContainerOutput } from './types.js';
 
@@ -202,11 +201,8 @@ Example flow:
 - When the user wants a new specialist, help them define it but always ask for the model
 - Your conversation persists until the user sends /clear or 8 hours pass`;
 
-  // Resolve database URL for memory MCP
-  const databaseUrl = await resolveSecret('DATABASE_URL', undefined, DATABASE_URL_REF);
-
   // Get MCP servers for this agent
-  const mcpServers = await getMCPServersForAgent(state.agent, databaseUrl);
+  const mcpServers = await getMCPServersForAgent(state.agent, DATABASE_URL);
 
   state.activeContainerId = state.agent.id;
 
@@ -390,8 +386,7 @@ async function handleDelegation(
     'Delegating task to specialist',
   );
 
-  const databaseUrl = await resolveSecret('DATABASE_URL', undefined, DATABASE_URL_REF);
-  const mcpServers = await getMCPServersForAgent(targetAgent, databaseUrl);
+  const mcpServers = await getMCPServersForAgent(targetAgent, DATABASE_URL);
 
   const result = await runContainerAgent({
     input: {

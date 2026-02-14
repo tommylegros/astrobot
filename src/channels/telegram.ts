@@ -117,6 +117,16 @@ export class TelegramChannel implements Channel {
     return from.first_name || from.username || 'Unknown';
   }
 
+  /** Dynamically add a chat ID to the allowlist (e.g. on first-message registration). */
+  addAllowedChat(chatId: number): void {
+    if (!this.allowedChatIds) {
+      this.allowedChatIds = new Set([chatId]);
+    } else {
+      this.allowedChatIds.add(chatId);
+    }
+    logger.info({ chatId }, 'Chat ID added to allowlist');
+  }
+
   async connect(): Promise<void> {
     logger.info('Starting Telegram bot...');
 

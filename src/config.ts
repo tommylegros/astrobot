@@ -21,8 +21,8 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 // ── Database ────────────────────────────────────────────────────────
 
-// Build DATABASE_URL from individual components when not set directly.
-// This avoids URL-escaping issues when the password contains special characters.
+// Build DATABASE_URL from POSTGRES_PASSWORD with proper URL encoding.
+// This is the primary path — DATABASE_URL is no longer set as an env var.
 function buildDatabaseUrl(): string {
   const password = process.env.POSTGRES_PASSWORD || 'astrobot';
   const user = process.env.POSTGRES_USER || 'astrobot';
@@ -32,10 +32,9 @@ function buildDatabaseUrl(): string {
   return `postgresql://${user}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
 }
 
-// Can be a direct connection string, a 1Password reference (op://...), or
-// auto-constructed from POSTGRES_PASSWORD with proper URL encoding.
-export const DATABASE_URL_REF =
-  process.env.DATABASE_URL || process.env.DATABASE_URL_REF || buildDatabaseUrl();
+// Computed once at startup from POSTGRES_PASSWORD (or DATABASE_URL env if set directly).
+export const DATABASE_URL =
+  process.env.DATABASE_URL || buildDatabaseUrl();
 
 // ── OpenRouter ──────────────────────────────────────────────────────
 
@@ -62,6 +61,12 @@ export const EMBEDDING_MODEL =
 // Can be a direct token or a 1Password reference (op://...)
 export const TELEGRAM_BOT_TOKEN_REF =
   process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN_REF || '';
+
+// Owner chat ID — set via env or auto-registered on first message.
+// When set, only this chat (and any others added at runtime) can talk to the bot.
+export const TELEGRAM_OWNER_CHAT_ID = process.env.TELEGRAM_OWNER_CHAT_ID
+  ? parseInt(process.env.TELEGRAM_OWNER_CHAT_ID, 10)
+  : undefined;
 
 // ── Container (Docker) ──────────────────────────────────────────────
 

@@ -881,6 +881,10 @@ TELEGRAM_BOT_TOKEN=$TELEGRAM_REF
 OPENROUTER_API_KEY=$OPENROUTER_REF
 POSTGRES_PASSWORD=$POSTGRES_REF
 
+# ── Telegram Chat Security ──────────────────────────────────────────
+# Leave empty — first person to message the bot is auto-registered as owner.
+TELEGRAM_OWNER_CHAT_ID=
+
 # ── Bot Configuration ───────────────────────────────────────────────
 
 ASSISTANT_NAME=$ASSISTANT_NAME

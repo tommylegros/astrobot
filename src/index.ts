@@ -10,11 +10,11 @@
  * - 1Password credential management
  * - Orchestrator → Specialist agent delegation
  */
-import { ASSISTANT_NAME, DATABASE_URL_REF, ORCHESTRATOR_MODEL, TELEGRAM_BOT_TOKEN_REF } from './config.js';
+import { ASSISTANT_NAME, DATABASE_URL, ORCHESTRATOR_MODEL, TELEGRAM_BOT_TOKEN_REF, TELEGRAM_OWNER_CHAT_ID } from './config.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { initDocker, ensureDockerReady } from './container-runner.js';
 import { resolveSecret } from './credentials.js';
-import { createAgent, getOrchestratorAgent, initDatabase, shutdownDatabase } from './db.js';
+import { createAgent, getOrchestratorAgent, getState, setState, initDatabase, shutdownDatabase } from './db.js';
 import { startIpcWatcher } from './ipc.js';
 import { logger } from './logger.js';
 import { handleMessage, initOrchestrator, shutdownOrchestrator } from './orchestrator.js';
@@ -62,8 +62,7 @@ async function main(): Promise<void> {
   logger.info('Docker ready');
 
   // 2. Initialize PostgreSQL
-  const databaseUrl = await resolveSecret('DATABASE_URL', DATABASE_URL_REF);
-  await initDatabase(databaseUrl);
+  await initDatabase(DATABASE_URL);
 
   // 3. Seed orchestrator agent if needed
   await seedOrchestratorAgent();
@@ -76,10 +75,34 @@ async function main(): Promise<void> {
     );
   }
 
-  // 5. Create Telegram channel
+  // 5. Load owner chat ID (from env or DB)
+  let ownerChatId: number | undefined = TELEGRAM_OWNER_CHAT_ID;
+  if (!ownerChatId) {
+    const stored = await getState('owner_chat_id') as number | null;
+    if (stored) {
+      ownerChatId = stored;
+      logger.info({ ownerChatId }, 'Loaded owner chat ID from database');
+    }
+  }
+
+  // 6. Create Telegram channel (with allowlist if owner is known)
   telegram = new TelegramChannel({
     botToken,
-    onMessage: (chatId, msg) => {
+    allowedChatIds: ownerChatId ? [ownerChatId] : undefined,
+    onMessage: async (chatId, msg) => {
+      const numericChatId = parseInt(chatId, 10);
+
+      // Auto-register first user as owner if no owner yet
+      if (!ownerChatId) {
+        ownerChatId = numericChatId;
+        await setState('owner_chat_id', ownerChatId);
+        telegram.addAllowedChat(ownerChatId);
+        logger.info(
+          { ownerChatId, sender: msg.senderName },
+          'First message — registered as owner',
+        );
+      }
+
       currentChatId = chatId;
 
       // Route to orchestrator
@@ -89,10 +112,10 @@ async function main(): Promise<void> {
     },
   });
 
-  // 6. Initialize orchestrator
+  // 7. Initialize orchestrator
   await initOrchestrator(telegram);
 
-  // 7. Start subsystems
+  // 8. Start subsystems
   startIpcWatcher({
     channel: telegram,
     chatId: () => currentChatId,
@@ -103,10 +126,14 @@ async function main(): Promise<void> {
     chatId: () => currentChatId,
   });
 
-  // 8. Connect Telegram (starts listening)
+  // 9. Connect Telegram (starts listening)
   await telegram.connect();
 
-  // 9. Graceful shutdown
+  if (!ownerChatId) {
+    logger.info('No owner registered — first person to message the bot will be auto-registered');
+  }
+
+  // 10. Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     await shutdownOrchestrator();

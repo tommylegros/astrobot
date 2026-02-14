@@ -5,7 +5,7 @@
  */
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATABASE_URL_REF, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { DATABASE_URL, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { runContainerAgent } from './container-runner.js';
 import {
   AgentRow,
@@ -17,7 +17,6 @@ import {
 } from './db.js';
 import { logger } from './logger.js';
 import { getMCPServersForAgent } from './mcp-registry.js';
-import { resolveSecret } from './credentials.js';
 import { Channel, ContainerOutput } from './types.js';
 
 export interface SchedulerDeps {
@@ -81,8 +80,7 @@ async function runTaskInBackground(
   let error: string | null = null;
 
   try {
-    const databaseUrl = await resolveSecret('DATABASE_URL', undefined, DATABASE_URL_REF);
-    const mcpServers = await getMCPServersForAgent(agent, databaseUrl);
+    const mcpServers = await getMCPServersForAgent(agent, DATABASE_URL);
 
     const output = await runContainerAgent({
       input: {

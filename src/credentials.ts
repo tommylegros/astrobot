@@ -9,7 +9,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-import { DATABASE_URL_REF } from './config.js';
+import { DATABASE_URL } from './config.js';
 import { logger } from './logger.js';
 
 const execFileAsync = promisify(execFile);
@@ -120,18 +120,8 @@ export async function getContainerSecrets(): Promise<Record<string, string>> {
     logger.warn('OpenRouter API key not available');
   }
 
-  // Database URL for memory MCP server
-  // DATABASE_URL may not be in env directly — config.ts constructs it from
-  // POSTGRES_PASSWORD when needed, so use the resolved config value.
-  try {
-    secrets.DATABASE_URL = await resolveSecret(
-      'DATABASE_URL',
-      process.env.DATABASE_URL_REF,
-      DATABASE_URL_REF,
-    );
-  } catch {
-    logger.warn('Database URL not available for container');
-  }
+  // Database URL for memory MCP server — computed once at startup in config.ts
+  secrets.DATABASE_URL = DATABASE_URL;
 
   return secrets;
 }
