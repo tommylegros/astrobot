@@ -28,6 +28,74 @@ const OUTPUT_END_MARKER = '---ASTROBOT_OUTPUT_END---';
 
 let docker: Docker;
 
+/**
+ * Resolve an MCP server environment variable value.
+ *
+ * Supports three formats:
+ *   - "${VAR_NAME}" → resolved from process.env.VAR_NAME
+ *   - "op://vault/item/field" → looked up in process.env by convention:
+ *       The deploy script already resolves op:// refs into env vars via `op run`.
+ *       We search process.env for a matching value (the field name, uppercased
+ *       with spaces/hyphens replaced by underscores, is checked first).
+ *       Falls back to the raw string if no match is found.
+ *   - anything else → returned as-is
+ */
+function resolveEnvValue(
+  value: string,
+  envKey: string,
+  serverName: string,
+  agentName: string,
+): string {
+  // Format: ${ENV_VAR_NAME}
+  const envRefMatch = value.match(/^\$\{([^}]+)\}$/);
+  if (envRefMatch) {
+    const envName = envRefMatch[1];
+    const resolved = process.env[envName];
+    if (resolved) {
+      return resolved;
+    }
+    logger.warn(
+      { agent: agentName, server: serverName, envVar: envKey, ref: envName },
+      'MCP env reference ${...} not found in process.env, passing as-is',
+    );
+    return value;
+  }
+
+  // Format: op://vault/item/field — try to find it in process.env
+  // When running via `op run --env-file=.env`, op:// refs in .env are resolved
+  // into actual env vars. The user should add a matching entry to .env so that
+  // `op run` resolves it before the app starts.
+  if (value.startsWith('op://')) {
+    // Search process.env for any variable whose original .env value matched
+    // this op:// reference. Since op run replaces the reference with the real
+    // value, we can't do a direct lookup. Instead, derive the likely env var
+    // name from the op:// path's field segment (last part).
+    const parts = value.split('/');
+    const field = parts[parts.length - 1]; // e.g. "api key", "token"
+    const guessedEnvName = field
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_'); // "api key" → "API_KEY"
+
+    // Try the key name itself first (most likely match), then the derived name
+    for (const candidate of [envKey, guessedEnvName]) {
+      const resolved = process.env[candidate];
+      if (resolved && !resolved.startsWith('op://')) {
+        return resolved;
+      }
+    }
+
+    logger.warn(
+      { agent: agentName, server: serverName, envVar: envKey, opRef: value },
+      'MCP op:// reference could not be resolved from process.env. ' +
+        'Add a matching entry to .env so `op run` can resolve it.',
+    );
+    return value;
+  }
+
+  // Plain value — return as-is
+  return value;
+}
+
 export function initDocker(): void {
   docker = new Docker({ socketPath: DOCKER_SOCKET });
   logger.info({ socket: DOCKER_SOCKET }, 'Docker client initialized');
@@ -121,6 +189,22 @@ export async function runContainerAgent(
   // Resolve secrets
   const secrets = await getContainerSecrets();
   input.secrets = secrets;
+
+  // Resolve MCP server environment variables.
+  // Values can use three formats:
+  //   1. Plain string:  "some-value"         → passed as-is
+  //   2. Env reference: "${GITHUB_TOKEN}"    → resolved from process.env
+  //   3. op:// ref:     "op://vault/item/f"  → resolved from process.env (op run
+  //      pre-resolves these into env vars before the container starts)
+  if (input.mcpServers) {
+    for (const server of input.mcpServers) {
+      if (server.env) {
+        for (const [key, value] of Object.entries(server.env)) {
+          server.env[key] = resolveEnvValue(value, key, server.name, input.agentName);
+        }
+      }
+    }
+  }
 
   // Determine timeout based on agent type
   const isOrchestrator = input.isOrchestrator;

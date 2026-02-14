@@ -5,6 +5,16 @@
  * Global servers are available to all agents; agent-scoped servers are
  * configured per-agent in their definition.
  *
+ * NOTE: MCP server env vars stored in the database support secret references:
+ *   - "${ENV_VAR}" syntax: resolved from process.env at container launch time.
+ *     Add the secret to .env as an op:// reference so `op run` resolves it.
+ *   - Plain values are passed through as-is.
+ *
+ * Example: To give an MCP server a GitHub token:
+ *   1. Add to .env:  GITHUB_TOKEN=op://Astrobot/GitHub/token
+ *   2. In DB env:    { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }
+ *   The host never stores plaintext — op run resolves it at startup.
+ *
  * Built-in servers (IPC, Memory) are always included.
  * External servers are stored in Postgres and can be managed at runtime.
  */
