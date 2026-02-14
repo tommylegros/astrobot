@@ -30,8 +30,50 @@ info()  { echo -e "${BLUE}[info]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo -e "${RED}[error]${NC} $*"; }
-header(){ echo -e "\n${BOLD}${CYAN}── $* ──${NC}\n"; }
 ask()   { echo -en "${BOLD}$*${NC} "; }
+
+TOTAL_STEPS=10
+CURRENT_STEP=0
+SCRIPT_START_TS="$(date +%s)"
+
+format_duration() {
+  local total_seconds="${1:-0}"
+  local hours=$(( total_seconds / 3600 ))
+  local minutes=$(( (total_seconds % 3600) / 60 ))
+  local seconds=$(( total_seconds % 60 ))
+
+  if [[ "$hours" -gt 0 ]]; then
+    printf "%dh %dm %ds" "$hours" "$minutes" "$seconds"
+  elif [[ "$minutes" -gt 0 ]]; then
+    printf "%dm %ds" "$minutes" "$seconds"
+  else
+    printf "%ds" "$seconds"
+  fi
+}
+
+header() {
+  CURRENT_STEP=$(( CURRENT_STEP + 1 ))
+  local title="$1"
+  local percent=$(( CURRENT_STEP * 100 / TOTAL_STEPS ))
+  local bar_width=30
+  local bar_filled=$(( percent * bar_width / 100 ))
+  local now
+  now="$(date +%s)"
+  local elapsed
+  elapsed="$(format_duration $(( now - SCRIPT_START_TS )))"
+  local bar_fill bar_empty
+
+  printf -v bar_fill '%*s' "$bar_filled" ''
+  bar_fill="${bar_fill// /#}"
+  printf -v bar_empty '%*s' "$(( bar_width - bar_filled ))" ''
+  bar_empty="${bar_empty// /-}"
+
+  echo ""
+  echo -e "${BOLD}${CYAN}Step ${CURRENT_STEP}/${TOTAL_STEPS}: ${title}${NC}"
+  echo -e "${CYAN}Progress: [${bar_fill}${bar_empty}] ${percent}%${NC}"
+  echo -e "${BLUE}Elapsed: ${elapsed}${NC}"
+  echo ""
+}
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -50,11 +92,127 @@ require_cmd() {
   fi
 }
 
+has_cmd() {
+  command -v "$1" &>/dev/null
+}
+
+ensure_brew_in_path() {
+  if [[ -d /opt/homebrew/bin ]]; then
+    export PATH="/opt/homebrew/bin:$PATH"
+  fi
+  if [[ -d /usr/local/bin ]]; then
+    export PATH="/usr/local/bin:$PATH"
+  fi
+}
+
+install_homebrew_if_needed() {
+  ensure_brew_in_path
+  if has_cmd brew; then
+    return
+  fi
+
+  warn "Homebrew is not installed. Installing Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  ensure_brew_in_path
+
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+
+  require_cmd brew "Homebrew installation failed. Install manually: https://brew.sh/"
+  ok "Homebrew installed"
+}
+
+ensure_macos_dependency() {
+  local cmd_name="$1"
+  local brew_target="$2"
+  local install_label="$3"
+
+  if has_cmd "$cmd_name"; then
+    return
+  fi
+
+  install_homebrew_if_needed
+  info "Installing $install_label..."
+  brew install "$brew_target"
+  ok "$install_label installed"
+}
+
+ensure_docker_desktop_running() {
+  if docker info &>/dev/null; then
+    return
+  fi
+
+  warn "Docker Desktop is installed but not running."
+  info "Launching Docker Desktop..."
+  open -a Docker || true
+
+  local retries=60
+  until docker info &>/dev/null || [[ $retries -eq 0 ]]; do
+    sleep 2
+    ((retries--))
+  done
+
+  if [[ $retries -eq 0 ]]; then
+    err "Docker daemon is not ready. Start Docker Desktop, then re-run this script."
+    exit 1
+  fi
+}
+
+install_prerequisites() {
+  local platform
+  platform="$(uname -s)"
+
+  case "$platform" in
+    Darwin)
+      ensure_brew_in_path
+
+      if ! has_cmd docker; then
+        install_homebrew_if_needed
+        info "Installing Docker Desktop..."
+        brew install --cask docker
+        ok "Docker Desktop installed"
+      fi
+
+      ensure_macos_dependency node node "Node.js"
+      ensure_macos_dependency op 1password-cli "1Password CLI"
+      ;;
+    *)
+      warn "Automatic prerequisite installation is currently supported on macOS only."
+      info "Install prerequisites manually:"
+      echo "  Docker: https://docs.docker.com/engine/install/"
+      echo "  Node.js 20+: https://nodejs.org/"
+      echo "  1Password CLI: https://developer.1password.com/docs/cli/get-started/"
+      ;;
+  esac
+}
+
+run_with_timer() {
+  local label="$1"
+  shift
+  local start_ts end_ts
+  start_ts="$(date +%s)"
+  info "$label..."
+  "$@"
+  end_ts="$(date +%s)"
+  ok "$label completed in $(format_duration $(( end_ts - start_ts )))"
+}
+
 # ── Pre-flight checks ──────────────────────────────────────────────
 
 header "Pre-flight checks"
 
+info "Running deployment from: $PROJECT_DIR"
+info "Script start time: $(date +"%Y-%m-%d %H:%M:%S")"
+
+if confirm "Automatically install missing prerequisites (Docker, Node.js, 1Password CLI)?"; then
+  install_prerequisites
+fi
+
 require_cmd docker "Install Docker: https://docs.docker.com/engine/install/"
+ensure_docker_desktop_running
 ok "Docker found: $(docker --version | head -1)"
 
 require_cmd docker "Docker Compose is required (bundled with Docker Desktop or install docker-compose-plugin)"
@@ -110,6 +268,7 @@ fi
 # ── Collect credentials ────────────────────────────────────────────
 
 header "Credential setup"
+info "Checking for existing credential items in vault '$VAULT_NAME'"
 
 echo "All secrets will be stored in 1Password and referenced via op:// URIs."
 echo "Your .env file will NEVER contain raw secrets."
@@ -193,6 +352,7 @@ fi
 # ── Bot customization ──────────────────────────────────────────────
 
 header "Bot customization"
+info "Collecting assistant and model configuration"
 
 # -- Assistant name --
 ask "Assistant name [Nano]:"
@@ -325,6 +485,7 @@ header "Generating .env"
 if [[ -f .env ]]; then
   warn ".env already exists — backing up to .env.backup.$(date +%s)"
   cp .env ".env.backup.$(date +%s)"
+  ok "Existing .env backed up"
 fi
 
 # Resolve secrets for docker-compose (it can't read op:// references natively)
@@ -386,36 +547,37 @@ ok ".env generated with 1Password references"
 
 header "Installing dependencies"
 
-npm ci
-ok "Node.js dependencies installed"
+run_with_timer "Installing Node.js dependencies with npm ci" npm ci
 
 # ── Build agent container ──────────────────────────────────────────
 
 header "Building agent container"
 
-bash ./container/build.sh
-ok "Agent container image built"
+run_with_timer "Building agent container image" bash ./container/build.sh
 
 # ── Build host service ─────────────────────────────────────────────
 
 header "Building host service"
 
-npm run build
-ok "TypeScript compiled"
+run_with_timer "Compiling host TypeScript service" npm run build
 
 # ── Start services ─────────────────────────────────────────────────
 
 header "Starting services"
 
-info "Starting PostgreSQL..."
-$COMPOSE up -d postgres
+run_with_timer "Starting PostgreSQL service" $COMPOSE up -d postgres
 
 # Wait for postgres to be healthy
 info "Waiting for PostgreSQL to be ready..."
 RETRIES=30
+ATTEMPT=1
 until $COMPOSE exec -T postgres pg_isready -U astrobot &>/dev/null || [[ $RETRIES -eq 0 ]]; do
+  if (( ATTEMPT % 5 == 0 )); then
+    info "PostgreSQL is still starting... (${ATTEMPT}/30 checks)"
+  fi
   sleep 1
   ((RETRIES--))
+  ((ATTEMPT++))
 done
 
 if [[ $RETRIES -eq 0 ]]; then
@@ -425,8 +587,8 @@ fi
 ok "PostgreSQL is ready"
 
 info "Starting Astrobot..."
-$COMPOSE up -d astrobot
-ok "Astrobot is running"
+run_with_timer "Starting Astrobot service" $COMPOSE up -d astrobot
+ok "Astrobot is running and accepting messages"
 
 # ── Verify ─────────────────────────────────────────────────────────
 
