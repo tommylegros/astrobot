@@ -32,7 +32,7 @@ warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo -e "${RED}[error]${NC} $*"; }
 ask()   { echo -en "${BOLD}$*${NC} "; }
 
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 CURRENT_STEP=0
 SCRIPT_START_TS="$(date +%s)"
 APT_UPDATED=0
@@ -834,6 +834,188 @@ fi
 
 ok "Advanced settings configured"
 
+# ── MCP Server Integrations ──────────────────────────────────────────
+
+header "MCP Server Integrations (optional)"
+
+info "Configure optional MCP servers to extend your agents' capabilities"
+echo ""
+echo "Available integrations:"
+echo "  • Slack            — Messages, channels, reactions, user profiles"
+echo "  • Todoist          — Tasks, projects, labels, comments"
+echo "  • Brave Search     — Web, image, video, news search + AI summaries"
+echo "  • Google Workspace — Gmail, Calendar, Drive, Docs, Sheets, Slides"
+echo "  • Playwright       — Browser automation (auto-enabled, no key needed)"
+echo ""
+echo "You can skip all and configure later: ./scripts/update.sh --setup-mcp"
+echo ""
+
+# Initialize MCP reference variables (empty = not configured)
+SLACK_BOT_TOKEN_REF=""
+SLACK_TEAM_ID_REF=""
+SLACK_CHANNEL_IDS_VAL=""
+TODOIST_API_KEY_REF=""
+BRAVE_API_KEY_REF=""
+GOOGLE_OAUTH_CLIENT_ID_REF=""
+GOOGLE_OAUTH_CLIENT_SECRET_REF=""
+
+# -- Slack --
+if confirm "Set up Slack?"; then
+  ITEM_NAME="Slack Bot"
+  if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+    ok "1Password item '$ITEM_NAME' already exists"
+    SLACK_TOKEN_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "token" "credential" "password")" || true
+    SLACK_TEAM_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "team id" "team_id")" || true
+    if [[ -n "${SLACK_TOKEN_FIELD:-}" ]]; then
+      SLACK_BOT_TOKEN_REF="op://$VAULT_NAME/$ITEM_NAME/$SLACK_TOKEN_FIELD"
+    fi
+    if [[ -n "${SLACK_TEAM_FIELD:-}" ]]; then
+      SLACK_TEAM_ID_REF="op://$VAULT_NAME/$ITEM_NAME/$SLACK_TEAM_FIELD"
+    fi
+  else
+    echo ""
+    echo "Create a Slack app: https://api.slack.com/apps → Create New App"
+    echo "Required scopes: channels:history, channels:read, chat:write, reactions:write, users:read"
+    echo ""
+    ask "Slack Bot Token (xoxb-...):"
+    read -rs SLACK_TOKEN_VAL
+    echo ""
+    ask "Slack Team/Workspace ID (starts with T):"
+    read -r SLACK_TEAM_VAL
+    ask "Channel IDs to expose (comma-separated, optional):"
+    read -r SLACK_CHANNEL_IDS_VAL
+
+    if [[ -n "${SLACK_TOKEN_VAL:-}" && -n "${SLACK_TEAM_VAL:-}" ]]; then
+      create_1password_item \
+        "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
+        "token=$SLACK_TOKEN_VAL" "team id=$SLACK_TEAM_VAL" || \
+        warn "Failed to store Slack credentials in 1Password"
+      SLACK_BOT_TOKEN_REF="op://$VAULT_NAME/$ITEM_NAME/token"
+      SLACK_TEAM_ID_REF="op://$VAULT_NAME/$ITEM_NAME/team id"
+      ok "Slack credentials stored in 1Password"
+    else
+      warn "Skipping Slack (token or team ID missing)"
+    fi
+  fi
+fi
+
+# -- Todoist --
+if confirm "Set up Todoist?"; then
+  ITEM_NAME="Todoist"
+  if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+    ok "1Password item '$ITEM_NAME' already exists"
+    TODOIST_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "password" "token")" || true
+    if [[ -n "${TODOIST_FIELD:-}" ]]; then
+      TODOIST_API_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/$TODOIST_FIELD"
+    fi
+  else
+    echo ""
+    echo "Get your API token: Todoist Settings → Integrations → Developer"
+    echo ""
+    ask "Todoist API Key:"
+    read -rs TODOIST_KEY_VAL
+    echo ""
+    if [[ -n "${TODOIST_KEY_VAL:-}" ]]; then
+      create_1password_item \
+        "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
+        "api key=$TODOIST_KEY_VAL" || \
+        warn "Failed to store Todoist credentials in 1Password"
+      TODOIST_API_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/api key"
+      ok "Todoist API key stored in 1Password"
+    else
+      warn "Skipping Todoist (no API key provided)"
+    fi
+  fi
+fi
+
+# -- Brave Search --
+if confirm "Set up Brave Search?"; then
+  ITEM_NAME="Brave Search"
+  if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+    ok "1Password item '$ITEM_NAME' already exists"
+    BRAVE_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "password" "token")" || true
+    if [[ -n "${BRAVE_FIELD:-}" ]]; then
+      BRAVE_API_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/$BRAVE_FIELD"
+    fi
+  else
+    echo ""
+    echo "Get an API key: https://brave.com/search/api/"
+    echo ""
+    ask "Brave Search API Key:"
+    read -rs BRAVE_KEY_VAL
+    echo ""
+    if [[ -n "${BRAVE_KEY_VAL:-}" ]]; then
+      create_1password_item \
+        "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
+        "api key=$BRAVE_KEY_VAL" || \
+        warn "Failed to store Brave Search credentials in 1Password"
+      BRAVE_API_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/api key"
+      ok "Brave Search API key stored in 1Password"
+    else
+      warn "Skipping Brave Search (no API key provided)"
+    fi
+  fi
+fi
+
+# -- Google Workspace --
+if confirm "Set up Google Workspace (Gmail, Calendar, Drive, Docs, Sheets)?"; then
+  ITEM_NAME="Google Workspace"
+  if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+    ok "1Password item '$ITEM_NAME' already exists"
+    GOOGLE_CID_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "client id" "client_id")" || true
+    GOOGLE_CS_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "client secret" "client_secret")" || true
+    if [[ -n "${GOOGLE_CID_FIELD:-}" ]]; then
+      GOOGLE_OAUTH_CLIENT_ID_REF="op://$VAULT_NAME/$ITEM_NAME/$GOOGLE_CID_FIELD"
+    fi
+    if [[ -n "${GOOGLE_CS_FIELD:-}" ]]; then
+      GOOGLE_OAUTH_CLIENT_SECRET_REF="op://$VAULT_NAME/$ITEM_NAME/$GOOGLE_CS_FIELD"
+    fi
+  else
+    echo ""
+    echo "Set up OAuth credentials:"
+    echo "  1. Google Cloud Console → APIs & Services → Credentials"
+    echo "  2. Create OAuth Client ID → Desktop Application"
+    echo "  3. Enable APIs: Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Tasks"
+    echo ""
+    ask "Google OAuth Client ID:"
+    read -r GOOGLE_CID_VAL
+    ask "Google OAuth Client Secret:"
+    read -rs GOOGLE_CS_VAL
+    echo ""
+
+    if [[ -n "${GOOGLE_CID_VAL:-}" && -n "${GOOGLE_CS_VAL:-}" ]]; then
+      create_1password_item \
+        "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
+        "client id=$GOOGLE_CID_VAL" "client secret=$GOOGLE_CS_VAL" || \
+        warn "Failed to store Google Workspace credentials in 1Password"
+      GOOGLE_OAUTH_CLIENT_ID_REF="op://$VAULT_NAME/$ITEM_NAME/client id"
+      GOOGLE_OAUTH_CLIENT_SECRET_REF="op://$VAULT_NAME/$ITEM_NAME/client secret"
+      ok "Google Workspace credentials stored in 1Password"
+      warn "NOTE: First use requires a one-time OAuth browser authorization"
+    else
+      warn "Skipping Google Workspace (credentials incomplete)"
+    fi
+  fi
+fi
+
+# Playwright needs no credentials
+ok "Playwright browser automation: auto-enabled (uses pre-installed Chromium)"
+
+# MCP summary
+echo ""
+MCP_CONFIGURED=()
+[[ -n "$SLACK_BOT_TOKEN_REF" ]] && MCP_CONFIGURED+=("Slack")
+[[ -n "$TODOIST_API_KEY_REF" ]] && MCP_CONFIGURED+=("Todoist")
+[[ -n "$BRAVE_API_KEY_REF" ]] && MCP_CONFIGURED+=("Brave Search")
+[[ -n "$GOOGLE_OAUTH_CLIENT_ID_REF" ]] && MCP_CONFIGURED+=("Google Workspace")
+MCP_CONFIGURED+=("Playwright")
+
+if [[ ${#MCP_CONFIGURED[@]} -gt 1 ]]; then
+  ok "MCP servers: ${MCP_CONFIGURED[*]}"
+else
+  info "Only Playwright configured. Add more later: ./scripts/update.sh --setup-mcp"
+fi
+
 # ── Generate .env ───────────────────────────────────────────────────
 
 header "Generating .env"
@@ -860,6 +1042,13 @@ if [[ "$REFS_VALID" != true ]]; then
   exit 1
 fi
 ok "All 1Password references validated"
+
+# Validate MCP references (non-blocking — these are optional)
+for mcp_ref in "$SLACK_BOT_TOKEN_REF" "$TODOIST_API_KEY_REF" "$BRAVE_API_KEY_REF" "$GOOGLE_OAUTH_CLIENT_ID_REF"; do
+  if [[ -n "$mcp_ref" ]] && ! op read "$mcp_ref" &>/dev/null; then
+    warn "Cannot validate MCP reference: $mcp_ref (server may not work until fixed)"
+  fi
+done
 
 cat > .env << ENVEOF
 # ─────────────────────────────────────────────────────────────────────
@@ -903,6 +1092,21 @@ MAX_CONCURRENT_CONTAINERS=$MAX_CONTAINERS
 
 LOG_LEVEL=$LOG_LEVEL
 ENVEOF
+
+# Append MCP server credentials
+cat >> .env << MCPEOF
+
+# ── MCP Server Credentials ────────────────────────────────────────
+# Configure/add servers: ./scripts/update.sh --setup-mcp
+
+SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN_REF
+SLACK_TEAM_ID=$SLACK_TEAM_ID_REF
+SLACK_CHANNEL_IDS=$SLACK_CHANNEL_IDS_VAL
+TODOIST_API_KEY=$TODOIST_API_KEY_REF
+BRAVE_API_KEY=$BRAVE_API_KEY_REF
+GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID_REF
+GOOGLE_OAUTH_CLIENT_SECRET=$GOOGLE_OAUTH_CLIENT_SECRET_REF
+MCPEOF
 
 # Lock down .env permissions
 chmod 600 .env
@@ -986,6 +1190,8 @@ echo "  1Password vault:     $VAULT_NAME"
 echo "  Telegram token:      $TELEGRAM_REF"
 echo "  OpenRouter key:      $OPENROUTER_REF"
 echo "  Postgres password:   $POSTGRES_REF"
+echo ""
+echo "  MCP servers:         ${MCP_CONFIGURED[*]}"
 echo ""
 echo -e "${BOLD}NOTE:${NC} All secrets are op:// references resolved at runtime."
 echo ""

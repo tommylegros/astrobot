@@ -92,6 +92,7 @@ SKIP_GIT=false
 SKIP_DEPS=false
 SKIP_BUILD=false
 RECONFIGURE=false
+SETUP_MCP=false
 FORCE=false
 
 while [[ $# -gt 0 ]]; do
@@ -100,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --no-deps)    SKIP_DEPS=true ;;
     --no-build)   SKIP_BUILD=true ;;
     --reconfigure) RECONFIGURE=true ;;
+    --setup-mcp)  SETUP_MCP=true ;;
     --force|-f)   FORCE=true ;;
     --help|-h)
       echo "Usage: ./scripts/update.sh [options]"
@@ -109,6 +111,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-deps       Skip npm install"
       echo "  --no-build      Skip container rebuild"
       echo "  --reconfigure   Re-run model/name/credential configuration"
+      echo "  --setup-mcp     Configure MCP server integrations (Slack, Todoist, etc.)"
       echo "  --force, -f     Skip confirmation prompts"
       echo "  --help, -h      Show this help"
       exit 0
@@ -324,6 +327,273 @@ if [[ "$RECONFIGURE" == true ]]; then
   ok "Reconfiguration complete"
 fi
 
+# ── MCP Server Setup ──────────────────────────────────────────────
+
+# Helper: find a readable field on a 1Password item
+find_op_field() {
+  local vault="$1" item="$2"
+  shift 2
+  local field
+  for field in "$@"; do
+    [[ -z "$field" ]] && continue
+    if op read "op://${vault}/${item}/${field}" &>/dev/null; then
+      echo "$field"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Helper: create a 1Password item with category fallback
+create_1password_item() {
+  local vault="$1" title="$2" category_hint="$3"
+  shift 3
+
+  local -a category_candidates=()
+  case "$category_hint" in
+    api-credential|API\ Credential)
+      category_candidates=("API Credential" "api-credential") ;;
+    *)
+      category_candidates=("$category_hint") ;;
+  esac
+
+  local category
+  for category in "${category_candidates[@]}"; do
+    if op item create --category="$category" --vault="$vault" --title="$title" "$@" >/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [[ "$SETUP_MCP" == true ]]; then
+  header "MCP Server Setup"
+
+  # Read vault name from .env
+  VAULT_NAME="$(grep '^OP_VAULT=' .env 2>/dev/null | cut -d= -f2- || echo "Astrobot")"
+  VAULT_NAME="${VAULT_NAME:-Astrobot}"
+  info "Using 1Password vault: $VAULT_NAME"
+
+  if ! op whoami &>/dev/null 2>&1; then
+    warn "1Password CLI is not signed in. Run: eval \$(op signin)"
+    warn "Skipping MCP setup."
+  else
+    echo ""
+    echo "Configure MCP server integrations for your agents."
+    echo "Already-configured servers will be detected and skipped."
+    echo ""
+
+    MCP_CHANGED=false
+
+    # -- Slack --
+    CURRENT_SLACK="$(grep '^SLACK_BOT_TOKEN=' .env 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$CURRENT_SLACK" ]]; then
+      ok "Slack: already configured"
+    elif confirm "Set up Slack?"; then
+      ITEM_NAME="Slack Bot"
+      if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+        ok "1Password item '$ITEM_NAME' already exists"
+        SLACK_TOKEN_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "token" "credential" "password")" || true
+        SLACK_TEAM_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "team id" "team_id")" || true
+        if [[ -n "${SLACK_TOKEN_FIELD:-}" && -n "${SLACK_TEAM_FIELD:-}" ]]; then
+          # Check if vars already exist in .env (possibly empty)
+          if grep -q '^SLACK_BOT_TOKEN=' .env 2>/dev/null; then
+            sed -i.bak "s|^SLACK_BOT_TOKEN=.*|SLACK_BOT_TOKEN=op://$VAULT_NAME/$ITEM_NAME/$SLACK_TOKEN_FIELD|" .env && rm -f .env.bak
+            sed -i.bak "s|^SLACK_TEAM_ID=.*|SLACK_TEAM_ID=op://$VAULT_NAME/$ITEM_NAME/$SLACK_TEAM_FIELD|" .env && rm -f .env.bak
+          else
+            echo "SLACK_BOT_TOKEN=op://$VAULT_NAME/$ITEM_NAME/$SLACK_TOKEN_FIELD" >> .env
+            echo "SLACK_TEAM_ID=op://$VAULT_NAME/$ITEM_NAME/$SLACK_TEAM_FIELD" >> .env
+            echo "SLACK_CHANNEL_IDS=" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Slack configured from existing 1Password item"
+        fi
+      else
+        echo ""
+        echo "Create a Slack app: https://api.slack.com/apps → Create New App"
+        echo "Required scopes: channels:history, channels:read, chat:write, reactions:write, users:read"
+        echo ""
+        ask "Slack Bot Token (xoxb-...):"
+        read -rs SLACK_TOKEN_VAL
+        echo ""
+        ask "Slack Team/Workspace ID (starts with T):"
+        read -r SLACK_TEAM_VAL
+        ask "Channel IDs to expose (comma-separated, optional):"
+        read -r SLACK_CHANNELS_VAL
+
+        if [[ -n "${SLACK_TOKEN_VAL:-}" && -n "${SLACK_TEAM_VAL:-}" ]]; then
+          create_1password_item "$VAULT_NAME" "Slack Bot" "API Credential" \
+            "token=$SLACK_TOKEN_VAL" "team id=$SLACK_TEAM_VAL" || \
+            warn "Failed to store Slack credentials"
+
+          if grep -q '^SLACK_BOT_TOKEN=' .env 2>/dev/null; then
+            sed -i.bak "s|^SLACK_BOT_TOKEN=.*|SLACK_BOT_TOKEN=op://$VAULT_NAME/Slack Bot/token|" .env && rm -f .env.bak
+            sed -i.bak "s|^SLACK_TEAM_ID=.*|SLACK_TEAM_ID=op://$VAULT_NAME/Slack Bot/team id|" .env && rm -f .env.bak
+            sed -i.bak "s|^SLACK_CHANNEL_IDS=.*|SLACK_CHANNEL_IDS=${SLACK_CHANNELS_VAL:-}|" .env && rm -f .env.bak
+          else
+            echo "SLACK_BOT_TOKEN=op://$VAULT_NAME/Slack Bot/token" >> .env
+            echo "SLACK_TEAM_ID=op://$VAULT_NAME/Slack Bot/team id" >> .env
+            echo "SLACK_CHANNEL_IDS=${SLACK_CHANNELS_VAL:-}" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Slack credentials stored in 1Password and .env updated"
+        else
+          warn "Skipping Slack (token or team ID missing)"
+        fi
+      fi
+    fi
+
+    # -- Todoist --
+    CURRENT_TODOIST="$(grep '^TODOIST_API_KEY=' .env 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$CURRENT_TODOIST" ]]; then
+      ok "Todoist: already configured"
+    elif confirm "Set up Todoist?"; then
+      ITEM_NAME="Todoist"
+      if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+        ok "1Password item '$ITEM_NAME' already exists"
+        TODOIST_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "token")" || true
+        if [[ -n "${TODOIST_FIELD:-}" ]]; then
+          if grep -q '^TODOIST_API_KEY=' .env 2>/dev/null; then
+            sed -i.bak "s|^TODOIST_API_KEY=.*|TODOIST_API_KEY=op://$VAULT_NAME/$ITEM_NAME/$TODOIST_FIELD|" .env && rm -f .env.bak
+          else
+            echo "TODOIST_API_KEY=op://$VAULT_NAME/$ITEM_NAME/$TODOIST_FIELD" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Todoist configured from existing 1Password item"
+        fi
+      else
+        echo ""
+        echo "Get your API token: Todoist Settings → Integrations → Developer"
+        echo ""
+        ask "Todoist API Key:"
+        read -rs TODOIST_KEY_VAL
+        echo ""
+        if [[ -n "${TODOIST_KEY_VAL:-}" ]]; then
+          create_1password_item "$VAULT_NAME" "Todoist" "API Credential" \
+            "api key=$TODOIST_KEY_VAL" || warn "Failed to store Todoist credentials"
+
+          if grep -q '^TODOIST_API_KEY=' .env 2>/dev/null; then
+            sed -i.bak "s|^TODOIST_API_KEY=.*|TODOIST_API_KEY=op://$VAULT_NAME/Todoist/api key|" .env && rm -f .env.bak
+          else
+            echo "TODOIST_API_KEY=op://$VAULT_NAME/Todoist/api key" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Todoist API key stored in 1Password and .env updated"
+        else
+          warn "Skipping Todoist (no API key provided)"
+        fi
+      fi
+    fi
+
+    # -- Brave Search --
+    CURRENT_BRAVE="$(grep '^BRAVE_API_KEY=' .env 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$CURRENT_BRAVE" ]]; then
+      ok "Brave Search: already configured"
+    elif confirm "Set up Brave Search?"; then
+      ITEM_NAME="Brave Search"
+      if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+        ok "1Password item '$ITEM_NAME' already exists"
+        BRAVE_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "token")" || true
+        if [[ -n "${BRAVE_FIELD:-}" ]]; then
+          if grep -q '^BRAVE_API_KEY=' .env 2>/dev/null; then
+            sed -i.bak "s|^BRAVE_API_KEY=.*|BRAVE_API_KEY=op://$VAULT_NAME/$ITEM_NAME/$BRAVE_FIELD|" .env && rm -f .env.bak
+          else
+            echo "BRAVE_API_KEY=op://$VAULT_NAME/$ITEM_NAME/$BRAVE_FIELD" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Brave Search configured from existing 1Password item"
+        fi
+      else
+        echo ""
+        echo "Get an API key: https://brave.com/search/api/"
+        echo ""
+        ask "Brave Search API Key:"
+        read -rs BRAVE_KEY_VAL
+        echo ""
+        if [[ -n "${BRAVE_KEY_VAL:-}" ]]; then
+          create_1password_item "$VAULT_NAME" "Brave Search" "API Credential" \
+            "api key=$BRAVE_KEY_VAL" || warn "Failed to store Brave Search credentials"
+
+          if grep -q '^BRAVE_API_KEY=' .env 2>/dev/null; then
+            sed -i.bak "s|^BRAVE_API_KEY=.*|BRAVE_API_KEY=op://$VAULT_NAME/Brave Search/api key|" .env && rm -f .env.bak
+          else
+            echo "BRAVE_API_KEY=op://$VAULT_NAME/Brave Search/api key" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Brave Search API key stored in 1Password and .env updated"
+        else
+          warn "Skipping Brave Search (no API key provided)"
+        fi
+      fi
+    fi
+
+    # -- Google Workspace --
+    CURRENT_GOOGLE="$(grep '^GOOGLE_OAUTH_CLIENT_ID=' .env 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$CURRENT_GOOGLE" ]]; then
+      ok "Google Workspace: already configured"
+    elif confirm "Set up Google Workspace (Gmail, Calendar, Drive, Docs, Sheets)?"; then
+      ITEM_NAME="Google Workspace"
+      if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+        ok "1Password item '$ITEM_NAME' already exists"
+        GOOGLE_CID_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "client id" "client_id")" || true
+        GOOGLE_CS_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "client secret" "client_secret")" || true
+        if [[ -n "${GOOGLE_CID_FIELD:-}" && -n "${GOOGLE_CS_FIELD:-}" ]]; then
+          if grep -q '^GOOGLE_OAUTH_CLIENT_ID=' .env 2>/dev/null; then
+            sed -i.bak "s|^GOOGLE_OAUTH_CLIENT_ID=.*|GOOGLE_OAUTH_CLIENT_ID=op://$VAULT_NAME/$ITEM_NAME/$GOOGLE_CID_FIELD|" .env && rm -f .env.bak
+            sed -i.bak "s|^GOOGLE_OAUTH_CLIENT_SECRET=.*|GOOGLE_OAUTH_CLIENT_SECRET=op://$VAULT_NAME/$ITEM_NAME/$GOOGLE_CS_FIELD|" .env && rm -f .env.bak
+          else
+            echo "GOOGLE_OAUTH_CLIENT_ID=op://$VAULT_NAME/$ITEM_NAME/$GOOGLE_CID_FIELD" >> .env
+            echo "GOOGLE_OAUTH_CLIENT_SECRET=op://$VAULT_NAME/$ITEM_NAME/$GOOGLE_CS_FIELD" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Google Workspace configured from existing 1Password item"
+        fi
+      else
+        echo ""
+        echo "Set up OAuth credentials:"
+        echo "  1. Google Cloud Console → APIs & Services → Credentials"
+        echo "  2. Create OAuth Client ID → Desktop Application"
+        echo "  3. Enable APIs: Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Tasks"
+        echo ""
+        ask "Google OAuth Client ID:"
+        read -r GOOGLE_CID_VAL
+        ask "Google OAuth Client Secret:"
+        read -rs GOOGLE_CS_VAL
+        echo ""
+
+        if [[ -n "${GOOGLE_CID_VAL:-}" && -n "${GOOGLE_CS_VAL:-}" ]]; then
+          create_1password_item "$VAULT_NAME" "Google Workspace" "API Credential" \
+            "client id=$GOOGLE_CID_VAL" "client secret=$GOOGLE_CS_VAL" || \
+            warn "Failed to store Google Workspace credentials"
+
+          if grep -q '^GOOGLE_OAUTH_CLIENT_ID=' .env 2>/dev/null; then
+            sed -i.bak "s|^GOOGLE_OAUTH_CLIENT_ID=.*|GOOGLE_OAUTH_CLIENT_ID=op://$VAULT_NAME/Google Workspace/client id|" .env && rm -f .env.bak
+            sed -i.bak "s|^GOOGLE_OAUTH_CLIENT_SECRET=.*|GOOGLE_OAUTH_CLIENT_SECRET=op://$VAULT_NAME/Google Workspace/client secret|" .env && rm -f .env.bak
+          else
+            echo "GOOGLE_OAUTH_CLIENT_ID=op://$VAULT_NAME/Google Workspace/client id" >> .env
+            echo "GOOGLE_OAUTH_CLIENT_SECRET=op://$VAULT_NAME/Google Workspace/client secret" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Google Workspace credentials stored in 1Password and .env updated"
+          warn "NOTE: First use requires a one-time OAuth browser authorization"
+        else
+          warn "Skipping Google Workspace (credentials incomplete)"
+        fi
+      fi
+    fi
+
+    # Playwright — always available
+    ok "Playwright browser automation: always enabled (no credentials needed)"
+
+    echo ""
+    if [[ "$MCP_CHANGED" == true ]]; then
+      ok "MCP configuration updated. Changes take effect on next restart."
+    else
+      info "No MCP changes made."
+    fi
+  fi
+fi
+
 # ── Install dependencies ───────────────────────────────────────────
 
 if [[ "$SKIP_DEPS" == false ]]; then
@@ -413,8 +683,19 @@ echo "  Assistant:           ${ASSISTANT_NAME:-Nano}"
 echo "  Orchestrator model:  ${ORCHESTRATOR_MODEL:-not set}"
 echo "  Default agent model: ${DEFAULT_AGENT_MODEL:-not set}"
 echo ""
+
+# Show configured MCP servers
+MCP_LIST=("Playwright")
+grep -q '^SLACK_BOT_TOKEN=.\+' .env 2>/dev/null && MCP_LIST+=("Slack")
+grep -q '^TODOIST_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Todoist")
+grep -q '^BRAVE_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Brave Search")
+grep -q '^GOOGLE_OAUTH_CLIENT_ID=.\+' .env 2>/dev/null && MCP_LIST+=("Google Workspace")
+echo "  MCP servers:         ${MCP_LIST[*]}"
+echo ""
+
 echo "Commands:"
 echo "  op run --env-file=.env -- $COMPOSE logs -f astrobot    # View logs"
 echo "  op run --env-file=.env -- $COMPOSE restart astrobot    # Restart"
 echo "  ./scripts/update.sh --reconfigure                      # Change models/settings"
+echo "  ./scripts/update.sh --setup-mcp                        # Configure MCP servers"
 echo ""
