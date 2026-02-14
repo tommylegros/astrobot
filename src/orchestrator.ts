@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { ASSISTANT_NAME, DATA_DIR, DATABASE_URL, IDLE_TIMEOUT, ORCHESTRATOR_TTL } from './config.js';
+import { tryHandleCommand, CommandContext } from './commands.js';
 import {
   runContainerAgent,
   sendIpcMessage,
@@ -101,6 +102,28 @@ export async function handleMessage(
   if (content.trim() === '/clear') {
     await handleClear(chatId);
     return;
+  }
+
+  // Handle slash commands (host-side, no container needed)
+  if (content.trim().startsWith('/')) {
+    const cmdCtx: CommandContext = {
+      chatId,
+      channel: channel!,
+      orchestratorAgent: state.agent,
+      activeContainerId: state.activeContainerId,
+      conversationId: state.conversationId,
+    };
+    const result = await tryHandleCommand(cmdCtx, content);
+    if (result) {
+      if (result.text) {
+        await channel!.sendMessage(chatId, result.text);
+      }
+      if (result.handled) {
+        return;
+      }
+      // If not handled (e.g. /delegate), fall through to orchestrator
+      // with the original content so the container processes the delegation
+    }
   }
 
   state.chatId = chatId;

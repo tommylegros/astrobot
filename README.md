@@ -115,6 +115,13 @@ Secrets are managed via 1Password with `op://` references — **no plaintext sec
 |---------|-------------|
 | `/start` | Initialize the bot |
 | `/clear` | Clear conversation, summarize to memory, start fresh |
+| `/status` | Show bot health (connection, model, memory/db stats) |
+| `/memory` | Show what the assistant remembers about you |
+| `/forget <topic>` | Remove memories matching a topic |
+| `/model [name]` | View or switch the orchestrator model |
+| `/agents` | List available specialist agents |
+| `/delegate <agent> <task>` | Delegate a task directly to a specialist agent |
+| `/history [count]` | Show recent conversation history (default: 20, max: 50) |
 
 ## Specialist Agents
 

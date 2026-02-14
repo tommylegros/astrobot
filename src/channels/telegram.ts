@@ -47,22 +47,28 @@ export class TelegramChannel implements Channel {
       );
     });
 
-    // Handle /clear command — triggers conversation reset
-    this.bot.command('clear', async (ctx) => {
-      if (!this.isAllowed(ctx)) return;
+    // Handle all slash commands — route through the message handler
+    // so the orchestrator's command system can process them.
+    for (const cmd of ['clear', 'status', 'memory', 'forget', 'model', 'agents', 'delegate', 'history']) {
+      this.bot.command(cmd, async (ctx) => {
+        if (!this.isAllowed(ctx)) return;
+        if (ctx.chat.type !== 'private') return;
 
-      const chatId = ctx.chat.id.toString();
-      const message: InboundMessage = {
-        telegramMessageId: ctx.message?.message_id || 0,
-        telegramChatId: ctx.chat.id,
-        sender: ctx.from?.username || ctx.from?.first_name || 'user',
-        senderName: this.getSenderName(ctx),
-        content: '/clear',
-        timestamp: new Date().toISOString(),
-      };
+        const chatId = ctx.chat.id.toString();
+        // Reconstruct the full command text (grammy strips the /command prefix from ctx.match)
+        const fullText = ctx.message?.text || `/${cmd}`;
+        const message: InboundMessage = {
+          telegramMessageId: ctx.message?.message_id || 0,
+          telegramChatId: ctx.chat.id,
+          sender: ctx.from?.username || ctx.from?.first_name || 'user',
+          senderName: this.getSenderName(ctx),
+          content: fullText,
+          timestamp: new Date().toISOString(),
+        };
 
-      this.onMessage(chatId, message);
-    });
+        this.onMessage(chatId, message);
+      });
+    }
 
     // Handle all text messages
     this.bot.on('message:text', async (ctx) => {
@@ -200,6 +206,19 @@ export class TelegramChannel implements Channel {
 
   async connect(): Promise<void> {
     logger.info('Starting Telegram bot...');
+
+    // Register command menu with Telegram
+    await this.bot.api.setMyCommands([
+      { command: 'start', description: 'Initialize the bot' },
+      { command: 'clear', description: 'Clear conversation and start fresh' },
+      { command: 'status', description: 'Show bot health and stats' },
+      { command: 'memory', description: 'Show what I remember about you' },
+      { command: 'forget', description: 'Remove memories by topic' },
+      { command: 'model', description: 'View or switch the AI model' },
+      { command: 'agents', description: 'List specialist agents' },
+      { command: 'delegate', description: 'Delegate a task to an agent' },
+      { command: 'history', description: 'Show recent conversation history' },
+    ]);
 
     // Use long polling
     this.bot.start({

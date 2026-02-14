@@ -345,6 +345,49 @@ export async function getMemoriesForAgent(
   return result.rows;
 }
 
+export async function deleteMemoriesByTopic(
+  agentId: string,
+  topic: string,
+): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM agent_memories
+     WHERE agent_id = $1 AND content ILIKE $2`,
+    [agentId, `%${topic}%`],
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function getRecentMessages(
+  chatId: number,
+  limit: number = 20,
+): Promise<{ sender: string; content: string; direction: string; created_at: string }[]> {
+  const result = await pool.query(
+    `SELECT sender, content, direction, created_at
+     FROM message_log
+     WHERE telegram_chat_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [chatId, limit],
+  );
+  return result.rows.reverse(); // chronological order
+}
+
+export async function getMemoryCount(agentId: string): Promise<number> {
+  const result = await pool.query(
+    'SELECT COUNT(*)::int AS count FROM agent_memories WHERE agent_id = $1',
+    [agentId],
+  );
+  return result.rows[0].count;
+}
+
+export async function getConversationCount(agentId: string): Promise<number> {
+  const result = await pool.query(
+    'SELECT COUNT(*)::int AS count FROM conversations WHERE agent_id = $1',
+    [agentId],
+  );
+  return result.rows[0].count;
+}
+
 // ── Message Log ─────────────────────────────────────────────────────
 
 export async function logMessage(msg: {
