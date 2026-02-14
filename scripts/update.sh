@@ -662,6 +662,48 @@ $line"
       fi
     fi
 
+    # -- Financial Modeling Prep --
+    CURRENT_FMP="$(grep '^FMP_API_KEY=' .env 2>/dev/null | cut -d= -f2-)" || true
+    if [[ -n "$CURRENT_FMP" ]]; then
+      ok "Financial Modeling Prep: already configured"
+    elif confirm "Set up Financial Modeling Prep (stock quotes, financials, market data)?"; then
+      ITEM_NAME="Financial Modeling Prep"
+      if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+        ok "1Password item '$ITEM_NAME' already exists"
+        FMP_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "token")" || true
+        if [[ -n "${FMP_FIELD:-}" ]]; then
+          if grep -q '^FMP_API_KEY=' .env 2>/dev/null; then
+            sed -i.bak "s|^FMP_API_KEY=.*|FMP_API_KEY=op://$VAULT_NAME/$ITEM_NAME/$FMP_FIELD|" .env && rm -f .env.bak
+          else
+            echo "FMP_API_KEY=op://$VAULT_NAME/$ITEM_NAME/$FMP_FIELD" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "Financial Modeling Prep configured from existing 1Password item"
+        fi
+      else
+        echo ""
+        echo "Get an API key: https://site.financialmodelingprep.com/register"
+        echo ""
+        ask "FMP API Key:"
+        read -rs FMP_KEY_VAL
+        echo ""
+        if [[ -n "${FMP_KEY_VAL:-}" ]]; then
+          create_1password_item "$VAULT_NAME" "Financial Modeling Prep" "API Credential" \
+            "api key=$FMP_KEY_VAL" || warn "Failed to store FMP credentials"
+
+          if grep -q '^FMP_API_KEY=' .env 2>/dev/null; then
+            sed -i.bak "s|^FMP_API_KEY=.*|FMP_API_KEY=op://$VAULT_NAME/Financial Modeling Prep/api key|" .env && rm -f .env.bak
+          else
+            echo "FMP_API_KEY=op://$VAULT_NAME/Financial Modeling Prep/api key" >> .env
+          fi
+          MCP_CHANGED=true
+          ok "FMP API key stored in 1Password and .env updated"
+        else
+          warn "Skipping Financial Modeling Prep (no API key provided)"
+        fi
+      fi
+    fi
+
     # Playwright — always available
     ok "Playwright browser automation: always enabled (no credentials needed)"
 
@@ -771,6 +813,7 @@ grep -q '^TODOIST_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Todoist")
 grep -q '^BRAVE_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Brave Search")
 grep -q '^GOOGLE_OAUTH_CLIENT_ID=.\+' .env 2>/dev/null && MCP_LIST+=("Google Workspace")
 grep -q '^APP_STORE_CONNECT_KEY_ID=.\+' .env 2>/dev/null && MCP_LIST+=("App Store Connect")
+grep -q '^FMP_API_KEY=.\+' .env 2>/dev/null && MCP_LIST+=("Financial Modeling Prep")
 echo "  MCP servers:         ${MCP_LIST[*]}"
 echo ""
 

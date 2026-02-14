@@ -846,6 +846,7 @@ echo "  • Todoist            — Tasks, projects, labels, comments"
 echo "  • Brave Search       — Web, image, video, news search + AI summaries"
 echo "  • Google Workspace   — Gmail, Calendar, Drive, Docs, Sheets, Slides"
 echo "  • App Store Connect  — Apps, beta testers, versions, analytics, sales"
+echo "  • Financial Modeling — Stock quotes, financials, market data, ETFs"
 echo "  • Playwright         — Browser automation (auto-enabled, no key needed)"
 echo ""
 echo "You can skip all and configure later: ./scripts/update.sh --setup-mcp"
@@ -863,6 +864,7 @@ APP_STORE_CONNECT_KEY_ID_REF=""
 APP_STORE_CONNECT_ISSUER_ID_REF=""
 APP_STORE_CONNECT_P8_KEY_REF=""
 APP_STORE_CONNECT_VENDOR_NUMBER_VAL=""
+FMP_API_KEY_REF=""
 
 # -- Slack --
 if confirm "Set up Slack?"; then
@@ -1068,6 +1070,35 @@ $line"
   fi
 fi
 
+# -- Financial Modeling Prep --
+if confirm "Set up Financial Modeling Prep (stock quotes, financials, market data)?"; then
+  ITEM_NAME="Financial Modeling Prep"
+  if op item get "$ITEM_NAME" --vault "$VAULT_NAME" &>/dev/null 2>&1; then
+    ok "1Password item '$ITEM_NAME' already exists"
+    FMP_FIELD="$(find_op_field "$VAULT_NAME" "$ITEM_NAME" "api key" "api_key" "credential" "token")" || true
+    if [[ -n "${FMP_FIELD:-}" ]]; then
+      FMP_API_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/$FMP_FIELD"
+    fi
+  else
+    echo ""
+    echo "Get an API key: https://site.financialmodelingprep.com/register"
+    echo ""
+    ask "FMP API Key:"
+    read -rs FMP_KEY_VAL
+    echo ""
+    if [[ -n "${FMP_KEY_VAL:-}" ]]; then
+      create_1password_item \
+        "$VAULT_NAME" "$ITEM_NAME" "API Credential" \
+        "api key=$FMP_KEY_VAL" || \
+        warn "Failed to store FMP credentials in 1Password"
+      FMP_API_KEY_REF="op://$VAULT_NAME/$ITEM_NAME/api key"
+      ok "FMP API key stored in 1Password"
+    else
+      warn "Skipping Financial Modeling Prep (no API key provided)"
+    fi
+  fi
+fi
+
 # Playwright needs no credentials
 ok "Playwright browser automation: auto-enabled (uses pre-installed Chromium)"
 
@@ -1079,6 +1110,7 @@ MCP_CONFIGURED=()
 [[ -n "$BRAVE_API_KEY_REF" ]] && MCP_CONFIGURED+=("Brave Search")
 [[ -n "$GOOGLE_OAUTH_CLIENT_ID_REF" ]] && MCP_CONFIGURED+=("Google Workspace")
 [[ -n "$APP_STORE_CONNECT_KEY_ID_REF" ]] && MCP_CONFIGURED+=("App Store Connect")
+[[ -n "$FMP_API_KEY_REF" ]] && MCP_CONFIGURED+=("Financial Modeling Prep")
 MCP_CONFIGURED+=("Playwright")
 
 if [[ ${#MCP_CONFIGURED[@]} -gt 1 ]]; then
@@ -1115,7 +1147,7 @@ fi
 ok "All 1Password references validated"
 
 # Validate MCP references (non-blocking — these are optional)
-for mcp_ref in "$SLACK_BOT_TOKEN_REF" "$TODOIST_API_KEY_REF" "$BRAVE_API_KEY_REF" "$GOOGLE_OAUTH_CLIENT_ID_REF" "$APP_STORE_CONNECT_KEY_ID_REF"; do
+for mcp_ref in "$SLACK_BOT_TOKEN_REF" "$TODOIST_API_KEY_REF" "$BRAVE_API_KEY_REF" "$GOOGLE_OAUTH_CLIENT_ID_REF" "$APP_STORE_CONNECT_KEY_ID_REF" "$FMP_API_KEY_REF"; do
   if [[ -n "$mcp_ref" ]] && ! op read "$mcp_ref" &>/dev/null; then
     warn "Cannot validate MCP reference: $mcp_ref (server may not work until fixed)"
   fi
@@ -1181,6 +1213,7 @@ APP_STORE_CONNECT_KEY_ID=$APP_STORE_CONNECT_KEY_ID_REF
 APP_STORE_CONNECT_ISSUER_ID=$APP_STORE_CONNECT_ISSUER_ID_REF
 APP_STORE_CONNECT_P8_KEY=$APP_STORE_CONNECT_P8_KEY_REF
 APP_STORE_CONNECT_VENDOR_NUMBER=$APP_STORE_CONNECT_VENDOR_NUMBER_VAL
+FMP_API_KEY=$FMP_API_KEY_REF
 MCPEOF
 
 # Lock down .env permissions

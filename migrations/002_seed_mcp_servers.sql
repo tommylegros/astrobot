@@ -1,7 +1,7 @@
 -- ─────────────────────────────────────────────────────────────────────
 -- Migration 002: Seed external MCP servers
 --
--- Registers six external MCP servers as global tools available to all
+-- Registers seven external MCP servers as global tools available to all
 -- agents. Env values use ${VAR_NAME} syntax — resolved from the host's
 -- process.env at container launch time (see container-runner.ts).
 --
@@ -102,6 +102,21 @@ VALUES (
     "APP_STORE_CONNECT_P8_KEY": "${APP_STORE_CONNECT_P8_KEY}",
     "APP_STORE_CONNECT_P8_PATH": "/tmp/asc-authkey.p8",
     "APP_STORE_CONNECT_VENDOR_NUMBER": "${APP_STORE_CONNECT_VENDOR_NUMBER}"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
+
+-- 7. Financial Modeling Prep — financial analysis, stock quotes, market data
+--    Pre-installed from git at /opt/fmp-mcp-server; runs via python3 -m src.server
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'financial_modeling_prep',
+  'stdio',
+  'sh',
+  '["-c", "cd /opt/fmp-mcp-server && exec python3 -m src.server"]'::jsonb,
+  NULL,
+  '{
+    "FMP_API_KEY": "${FMP_API_KEY}"
   }'::jsonb,
   'global'
 ) ON CONFLICT (name) DO NOTHING;

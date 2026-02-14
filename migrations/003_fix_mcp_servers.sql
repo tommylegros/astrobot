@@ -3,6 +3,7 @@
 --
 -- 1. Playwright: Remove invalid --no-chromium-sandbox flag.
 -- 2. App Store Connect: Add new MCP server (if not already present).
+-- 3. Financial Modeling Prep: Add new MCP server (if not already present).
 -- ─────────────────────────────────────────────────────────────────────
 
 -- Fix Playwright args: remove the invalid --no-chromium-sandbox flag
@@ -24,6 +25,20 @@ VALUES (
     "APP_STORE_CONNECT_P8_KEY": "${APP_STORE_CONNECT_P8_KEY}",
     "APP_STORE_CONNECT_P8_PATH": "/tmp/asc-authkey.p8",
     "APP_STORE_CONNECT_VENDOR_NUMBER": "${APP_STORE_CONNECT_VENDOR_NUMBER}"
+  }'::jsonb,
+  'global'
+) ON CONFLICT (name) DO NOTHING;
+
+-- Add Financial Modeling Prep MCP server (idempotent — skips if already exists)
+INSERT INTO mcp_servers (name, transport, command, args, url, env, scope)
+VALUES (
+  'financial_modeling_prep',
+  'stdio',
+  'sh',
+  '["-c", "cd /opt/fmp-mcp-server && exec python3 -m src.server"]'::jsonb,
+  NULL,
+  '{
+    "FMP_API_KEY": "${FMP_API_KEY}"
   }'::jsonb,
   'global'
 ) ON CONFLICT (name) DO NOTHING;

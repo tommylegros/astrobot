@@ -58,6 +58,13 @@ ENV UV_CACHE_DIR=/opt/uv-cache
 RUN uvx workspace-mcp --help 2>/dev/null || true && \
     chmod -R a+rwX /opt/uv-cache
 
+# Financial Modeling Prep MCP server (Python, git-based — not on PyPI)
+# Clone + install deps at build time so it's ready to run as `python3 -m src.server`
+RUN git clone --depth 1 https://github.com/cdtait/fmp-mcp-server.git /opt/fmp-mcp-server && \
+    cd /opt/fmp-mcp-server && \
+    uv pip install --system -r requirements.txt && \
+    chmod -R a+rX /opt/fmp-mcp-server
+
 # ── Agent runner build ──────────────────────────────────────────────
 
 # Create app directory
