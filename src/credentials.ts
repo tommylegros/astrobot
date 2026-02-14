@@ -9,6 +9,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
+import { DATABASE_URL_REF } from './config.js';
 import { logger } from './logger.js';
 
 const execFileAsync = promisify(execFile);
@@ -120,10 +121,13 @@ export async function getContainerSecrets(): Promise<Record<string, string>> {
   }
 
   // Database URL for memory MCP server
+  // DATABASE_URL may not be in env directly — config.ts constructs it from
+  // POSTGRES_PASSWORD when needed, so use the resolved config value.
   try {
     secrets.DATABASE_URL = await resolveSecret(
       'DATABASE_URL',
       process.env.DATABASE_URL_REF,
+      DATABASE_URL_REF,
     );
   } catch {
     logger.warn('Database URL not available for container');
