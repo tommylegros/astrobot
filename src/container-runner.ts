@@ -94,11 +94,14 @@ export async function runContainerAgent(
   const { input, onOutput } = options;
   const startTime = Date.now();
 
-  // Prepare IPC directories
+  // Prepare IPC directories — must be world-writable so the non-root agent
+  // container (runs as UID 1000 "node") can read/write/delete files in them.
   const agentIpcDir = path.join(DATA_DIR, 'ipc', input.agentId);
-  fs.mkdirSync(path.join(agentIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(agentIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(agentIpcDir, 'input'), { recursive: true });
+  for (const sub of ['messages', 'tasks', 'input']) {
+    const dir = path.join(agentIpcDir, sub);
+    fs.mkdirSync(dir, { recursive: true });
+    try { fs.chmodSync(dir, 0o777); } catch { /* best effort */ }
+  }
 
   // Clean stale close sentinel
   const closeSentinel = path.join(agentIpcDir, 'input', '_close');
@@ -411,10 +414,11 @@ export function sendIpcMessage(agentId: string, text: string): boolean {
   const inputDir = path.join(DATA_DIR, 'ipc', agentId, 'input');
   try {
     fs.mkdirSync(inputDir, { recursive: true });
+    try { fs.chmodSync(inputDir, 0o777); } catch { /* best effort */ }
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
     const filepath = path.join(inputDir, filename);
     const tempPath = `${filepath}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
+    fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }), { mode: 0o666 });
     fs.renameSync(tempPath, filepath);
     return true;
   } catch {
@@ -429,7 +433,8 @@ export function closeAgentContainer(agentId: string): void {
   const inputDir = path.join(DATA_DIR, 'ipc', agentId, 'input');
   try {
     fs.mkdirSync(inputDir, { recursive: true });
-    fs.writeFileSync(path.join(inputDir, '_close'), '');
+    try { fs.chmodSync(inputDir, 0o777); } catch { /* best effort */ }
+    fs.writeFileSync(path.join(inputDir, '_close'), '', { mode: 0o666 });
   } catch {
     // ignore
   }
