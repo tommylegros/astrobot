@@ -438,6 +438,76 @@ ensure_op_authenticated() {
   return 0
 }
 
+get_op_identity_label() {
+  local whoami_json
+  whoami_json="$(op whoami --format=json 2>/dev/null || true)"
+
+  local email name service_id
+  email="$(printf "%s" "$whoami_json" | grep -o '"email":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  name="$(printf "%s" "$whoami_json" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  service_id="$(printf "%s" "$whoami_json" | grep -o '"user_uuid":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+
+  if [[ -n "$email" ]]; then
+    printf "%s" "$email"
+  elif [[ -n "$name" ]]; then
+    printf "%s" "$name"
+  elif [[ -n "$service_id" ]]; then
+    printf "service-account:%s" "$service_id"
+  else
+    printf "authenticated session"
+  fi
+}
+
+configure_vault() {
+  local default_vault="Astrobot"
+  local selected_vault
+  local attempts=0
+
+  while true; do
+    attempts=$(( attempts + 1 ))
+    if [[ "$attempts" -gt 8 ]]; then
+      err "Unable to configure a usable 1Password vault after multiple attempts."
+      exit 1
+    fi
+
+    ask "Vault name to use [${default_vault}]:"
+    read -r selected_vault
+    selected_vault="${selected_vault:-$default_vault}"
+
+    if op vault get "$selected_vault" &>/dev/null 2>&1; then
+      VAULT_NAME="$selected_vault"
+      ok "Using vault '$VAULT_NAME'"
+      return 0
+    fi
+
+    warn "Vault '$selected_vault' was not found or is not accessible with current credentials."
+
+    local vault_names
+    vault_names="$(op vault list --format=json 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4 || true)"
+    if [[ -n "$vault_names" ]]; then
+      info "Accessible vaults for this account:"
+      while IFS= read -r vault; do
+        [[ -n "$vault" ]] && echo "  - $vault"
+      done <<< "$vault_names"
+    else
+      info "Could not list vaults (permission-limited service account is common)."
+    fi
+
+    if confirm "Create vault '$selected_vault' if it does not exist?"; then
+      info "Creating vault '$selected_vault'..."
+      if op vault create "$selected_vault" --description "Astrobot AI assistant credentials" >/dev/null 2>&1; then
+        VAULT_NAME="$selected_vault"
+        ok "Vault '$VAULT_NAME' created and selected"
+        return 0
+      fi
+      warn "Vault creation failed (likely insufficient permission)."
+    fi
+
+    info "Please choose an existing vault with read/write access."
+    default_vault="$selected_vault"
+  done
+}
+
 # ── Pre-flight checks ──────────────────────────────────────────────
 
 header "Pre-flight checks"
@@ -481,22 +551,14 @@ if ! ensure_op_authenticated; then
   info "1Password authentication is required for deployment."
   exit 1
 fi
-OP_ACCOUNT=$(op whoami --format=json 2>/dev/null | grep -o '"email":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+OP_ACCOUNT="$(get_op_identity_label)"
 ok "1Password signed in as: $OP_ACCOUNT"
 
 # ── 1Password vault setup ──────────────────────────────────────────
 
 header "1Password vault setup"
 
-VAULT_NAME="Astrobot"
-
-if op vault get "$VAULT_NAME" &>/dev/null 2>&1; then
-  ok "Vault '$VAULT_NAME' already exists"
-else
-  info "Creating vault '$VAULT_NAME'..."
-  op vault create "$VAULT_NAME" --description "Astrobot AI assistant credentials" >/dev/null
-  ok "Vault '$VAULT_NAME' created"
-fi
+configure_vault
 
 # ── Collect credentials ────────────────────────────────────────────
 
